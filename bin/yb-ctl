@@ -294,13 +294,13 @@ class Installer:
                 post_install_completion_flag_path)
             return
         logging.info("Running the post-installation script %s", post_install_script_path)
-        p = subprocess.Popen(
+        process = subprocess.Popen(
                 post_install_script_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        std_out, std_err = pipes.communicate()
-        if p.returncode != 0:
+        std_out, std_err = process.communicate()
+        if process.returncode != 0:
             logging.error(
                 "Failed running %s (exit code: %d). Standard output:\n%s\n. Standard error:\n%s",
-                post_install_script_path, p.returncode, std_out, std_err)
+                post_install_script_path, process.returncode, std_out, std_err)
             raise RuntimeError("Failed running %s" % post_install_script_path)
         logging.info("Successfully ran the post-installation script")
 
@@ -484,8 +484,9 @@ class ClusterOptions:
             binary_dirs = [self.custom_binary_dir]
             logging.info("Using custom binaries path: {}".format(self.custom_binary_dir))
         else:
+            binary_dirs = []
             if self.installation_dir:
-                binary_dirs = [
+                binary_dirs += [
                     os.path.join(self.installation_dir, 'bin'),
                     os.path.join(self.installation_dir, 'postgres', 'bin')
                 ]
