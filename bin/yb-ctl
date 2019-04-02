@@ -129,7 +129,7 @@ def get_home_dir():
     return os.path.expanduser('~')
 
 
-def get_data_dir():
+def get_default_data_dir():
     return os.path.join(get_home_dir(), 'yugabyte-data')
 
 
@@ -157,27 +157,29 @@ def get_file_sha256_sum(file_path):
 
 
 def download_file(url, dest_path):
+    """
+    Download a file and return its SHA256 sum.
+    """
     from urllib2 import urlopen, URLError, HTTPError
     import urllib2
-    with open(dest_path, 'wb') as dest_file:
-        req = urllib2.Request(url)
-        req.add_header('authority', 'downloads.yugabyte.com')
-        req.add_header('upgrade-insecure-requests', '1')
-        req.add_header('user-agent', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.121 Safari/537.36')
-        req.add_header('dnt', '1')
-        req.add_header('accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8')
-        req.add_header('accept-encoding', 'gzip, deflate, br')
-        req.add_header('accept-language', 'en-US,en;q=0.9')
-        f = urlopen(req)
-        print "downloading " + url
-
-        # Open our local file for writing
-        with open(os.path.basename(url), "wb") as local_file:
-            sha256_hash = hashlib.sha256()
-            for byte_block in iter(lambda: f.read(1048576), b""):
-                sha256_hash.update(byte_block)
-                dest_file.write(byte_block)
-        return sha256_hash.hexdigest()
+    try:
+        with open(dest_path, 'wb') as dest_file:
+            req = urllib2.Request(url)
+            req.add_header('user-agent', 'Mozilla')
+            remote_file = urlopen(req)
+            try:
+                sha256_hash = hashlib.sha256()
+                for byte_block in iter(lambda: remote_file.read(1048576), b""):
+                    sha256_hash.update(byte_block)
+                    dest_file.write(byte_block)
+                return sha256_hash.hexdigest()
+            finally:
+                remote_file.close()
+    except:
+        if os.path.exists(dest_path):
+            logging.warn("Deleting the unfinished download: %s", dest_path)
+            os.remove(dest_path)
+        raise
 
 
 def mkdir_p(dir_path):
@@ -586,7 +588,7 @@ class ClusterControl:
             "--binary_dir", default=None,
             help="Specify a custom directory in which to find the yugabyte binaries.")
         self.parser.add_argument(
-            "--data_dir", default=get_data_dir(),
+            "--data_dir", default=get_default_data_dir(),
             help="Specify a custom directory where to store data.")
         self.parser.add_argument(
             "--replication_factor", "--rf", default=1, type=int,
@@ -1154,11 +1156,11 @@ class ClusterControl:
              'YB_ENABLED_IN_POSTGRES': '1'}):
             adjust_env_for_postgres()
 
-            tmp_pg_data_dir = os.path.join(get_data_dir(), 'yb-ctl_tmp_pg_data_{}'.format(''.join(
-                [random.choice('0123456789abcdef') for _ in range(32)])))
+            tmp_pg_data_dir = os.path.join(self.args.data_dir, 'yb-ctl_tmp_pg_data_{}'.format(
+                ''.join([random.choice('0123456789abcdef') for _ in range(32)])))
 
             try:
-                with open(os.path.join(get_data_dir(), "initdb.log"), 'w') as finitdb:
+                with open(os.path.join(self.args.data_dir, "initdb.log"), 'w') as finitdb:
                     subprocess.check_call([
                         initdb_binary_path,
                         '-D', tmp_pg_data_dir,
