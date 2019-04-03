@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export YB_PG_FALLBACK_SYSTEM_USER_NAME=$USER
+
 yb_data_dirs=(
   "$HOME/yugabyte-data"
 )
