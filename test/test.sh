@@ -2,6 +2,7 @@
 set -euo pipefail
 
 export YB_PG_FALLBACK_SYSTEM_USER_NAME=$USER
+export YB_DISABLE_CALLHOME=1
 
 yb_data_dirs=(
   "$HOME/yugabyte-data"
