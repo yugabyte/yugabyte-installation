@@ -257,14 +257,14 @@ class Installer:
                 need_to_download = False
             else:
                 logging.info(
-                    "Existing file %s has an SHA-256 sum %s, different from the expected sum %s, "
-                    "re-downloading", download_dest_path, existing_sha256_sum, expected_sha256_sum)
+                    "Existing file %s has an SHA-256 sum %s, different from the expected sum %s. "
+                    "Removing the existing file and re-downloading.",
+                    download_dest_path, existing_sha256_sum, expected_sha256_sum)
                 os.remove(download_dest_path)
     
         if need_to_download:
             downloader = urllib.FancyURLopener()
             logging.info("Downloading %s to %s", download_url, download_dest_path)
-            #downloader.retrieve(download_url, download_dest_path)
             downloaded_sha256_sum = download_file(download_url, download_dest_path)
             if downloaded_sha256_sum != expected_sha256_sum:
                 raise IOError(
