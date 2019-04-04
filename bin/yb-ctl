@@ -73,6 +73,9 @@ import os
 import shutil
 import random
 import json
+import hashlib
+import urllib
+import subprocess
 
 DAEMON_TYPE_MASTER = 'master'
 DAEMON_TYPE_TSERVER = 'tserver'
@@ -122,8 +125,189 @@ def adjust_env_for_postgres():
             del os.environ[k]
 
 
-def get_data_dir():
-    return os.path.join(os.environ['HOME'], 'yugabyte-data')
+def get_home_dir():
+    return os.path.expanduser('~')
+
+
+def get_default_data_dir():
+    return os.path.join(get_home_dir(), 'yugabyte-data')
+
+
+def get_os_family():
+    if sys.platform.startswith('linux'):
+        return 'linux'
+    if sys.platform.startswith('darwin'):
+        return 'darwin'
+    raise ValueError("Unsupported operating system: sys.platform=%s" % sys.platform)
+
+
+def is_linux():
+    return get_os_family() == 'linux'
+
+
+def get_file_sha256_sum(file_path):
+    """
+    Compute a SHA256 checksum of a file. Based on http://bit.ly/2uGHL8N
+    """
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(1048576), b""):
+            sha256_hash.update(byte_block)
+        return sha256_hash.hexdigest()
+
+
+def download_file(url, dest_path):
+    """
+    Download a file and return its SHA256 sum.
+    """
+    from urllib2 import urlopen, URLError, HTTPError
+    import urllib2
+    try:
+        with open(dest_path, 'wb') as dest_file:
+            req = urllib2.Request(url)
+            req.add_header('user-agent', 'Mozilla')
+            remote_file = urlopen(req)
+            try:
+                sha256_hash = hashlib.sha256()
+                for byte_block in iter(lambda: remote_file.read(1048576), b""):
+                    sha256_hash.update(byte_block)
+                    dest_file.write(byte_block)
+                return sha256_hash.hexdigest()
+            finally:
+                remote_file.close()
+    except:
+        if os.path.exists(dest_path):
+            logging.warn("Deleting the unfinished download: %s", dest_path)
+            os.remove(dest_path)
+        raise
+
+
+def mkdir_p(dir_path):
+    try:
+        if not os.path.exists(dir_path):
+            os.makedirs(dir_path)
+    except IOError, ex:
+        if os.path.isdir(dir_path):
+            # Concurrent directory creation.
+            return
+        raise
+
+
+def is_yugabyte_db_installation_dir(top_dir):
+    for rel_path in [
+            'bin/yb-master',
+            'bin/yb-tserver',
+            'postgres/bin/postgres'
+            ]:
+        if not os.path.exists(os.path.join(top_dir, rel_path)):
+            return False
+    return True
+
+
+class Installer:
+    YUGABYTE_DB_VERSION = '1.2.2.0'
+    DOWNLOAD_URL_PATTERN = 'https://downloads.yugabyte.com/yugabyte-ce-{version}-{os}.tar.gz'
+    SHA256_SUM_BY_OS = {
+        'darwin': 'dbed190bd49fab14aca2c0e4b8948e4d15a6dcb193d210ba90f5e1317345ea7e',
+        'linux': '8469d847b87dcea2a4a13faab0bdba1bf73b683393530a2e8571cdd06cc71883'
+    }
+
+    def __init__(self):
+        self.installation_dir = None
+        pass
+
+    def get_download_cache_dir(self):
+        return os.path.join(get_home_dir(), '.cache', 'yugabyte', 'downloads')
+
+    def get_software_installation_top_dir(self):
+        return os.path.join(get_home_dir(), 'yugabyte-db-installation')
+
+    def install(self):
+        installation_top_dir = self.get_software_installation_top_dir()
+        self.installation_dir = os.path.join(
+                installation_top_dir, 'yugabyte-' + Installer.YUGABYTE_DB_VERSION)
+        if os.path.exists(self.installation_dir):
+            if not is_yugabyte_db_installation_dir(self.installation_dir):
+                logging.error(
+                    "Directory %s exists but does not appear to be a valid YugaByte DB "
+                    "installation directory. Remove that directory and re-run the script "
+                    "to re-install YugaByte DB.", installation_dir)
+                sys.exit(1)
+            logging.info("Found existing YugaByte DB installation at %s", self.installation_dir)
+            # Already installed.
+            self.run_post_install_script()
+            return
+
+        cache_dir = self.get_download_cache_dir()
+        mkdir_p(cache_dir)
+        os_family = get_os_family()
+        download_url = Installer.DOWNLOAD_URL_PATTERN.format(
+                version=self.YUGABYTE_DB_VERSION,
+                os=os_family)
+        download_name = download_url.rsplit('/', 1)[-1]
+        download_dest_path = os.path.join(cache_dir, download_name)
+        expected_sha256_sum = Installer.SHA256_SUM_BY_OS[os_family]
+        
+        need_to_download = True
+        if os.path.exists(download_dest_path):
+            logging.info("File %s already exists, validating the checksum", download_dest_path)
+            existing_sha256_sum = get_file_sha256_sum(download_dest_path)
+            if existing_sha256_sum == expected_sha256_sum:
+                logging.info("Checksum is valid for %s", download_dest_path)
+                need_to_download = False
+            else:
+                logging.info(
+                    "Existing file %s has an SHA-256 sum %s, different from the expected sum %s. "
+                    "Removing the existing file and re-downloading.",
+                    download_dest_path, existing_sha256_sum, expected_sha256_sum)
+                os.remove(download_dest_path)
+    
+        if need_to_download:
+            downloader = urllib.FancyURLopener()
+            logging.info("Downloading %s to %s", download_url, download_dest_path)
+            downloaded_sha256_sum = download_file(download_url, download_dest_path)
+            if downloaded_sha256_sum != expected_sha256_sum:
+                raise IOError(
+                        "Downloaded file %s has SHA-256 sum %s, different from expected: %s" % (
+                                download_dest_path, downloaded_sha256_sum, expected_sha256_sum))
+
+        mkdir_p(installation_top_dir)
+        logging.info("Extracting %s in directory %s", download_dest_path, installation_top_dir)
+        subprocess.check_call(
+            ['tar',
+             'xf',
+             download_dest_path],
+            cwd=installation_top_dir)
+        if not os.path.isdir(self.installation_dir):
+            raise RuntimeError(
+                    "Extracting %s in directory %s failed to produce directory %s" %(
+                            download_dest_path, installation_top_dir, self.installation_dir))
+        self.run_post_install_script()
+
+    def run_post_install_script(self):
+        if not is_linux():
+            return
+        post_install_script_path = os.path.join(
+            self.installation_dir, 'bin', 'post_install.sh')
+        post_install_completion_flag_path = post_install_script_path + '.completed'
+        if os.path.exists(post_install_completion_flag_path):
+            logging.debug(
+                "File %s already exists, meaning the post_install.sh script has already run",
+                post_install_completion_flag_path)
+            return
+        logging.info("Running the post-installation script %s", post_install_script_path)
+        process = subprocess.Popen(
+                post_install_script_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        std_out, std_err = process.communicate()
+        if process.returncode != 0:
+            logging.error(
+                "Failed running %s (exit code: %d). Standard output:\n%s\n. Standard error:\n%s",
+                post_install_script_path, process.returncode, std_out, std_err)
+            raise RuntimeError("Failed running %s" % post_install_script_path)
+        logging.info("Successfully ran the post-installation script")
+
+        with open(post_install_completion_flag_path, 'w'):
+            pass
 
 
 class SetAndRestoreEnv:
@@ -185,6 +369,10 @@ class ClusterOptions:
         self.custom_binary_dir = None
         self.script_dir = os.path.dirname(os.path.realpath(__file__))
 
+        self.installation_dir = None
+        if is_yugabyte_db_installation_dir(os.path.dirname(self.script_dir)):
+            self.installation_dir = os.path.dirname(self.script_dir)
+
         if os.environ.get('YB_USE_EXTERNAL_BUILD_ROOT') == '1':
             build_dir = os.path.dirname(self.script_dir) + '__build'
         else:
@@ -228,6 +416,7 @@ class ClusterOptions:
         self.is_shell_master = False
         self.is_startup_command = False
         self.enable_ysql = True
+        self.install_if_needed = False
 
     def parse_flag_args(self, flag_args):
         flags = [] if flag_args is None else flag_args.split(",")
@@ -264,7 +453,7 @@ class ClusterOptions:
             if len(t_item) != 3:
                 raise RuntimeError("Invalid argument: Each entry in placement info should "
                                    "specify cloud, region and zone as cloud.region.zone, "
-                                   "seperated by commas")
+                                   "separated by commas.")
             self.placement_info.append(t_item)
 
         if hasattr(args, "master") and args.master:
@@ -272,6 +461,11 @@ class ClusterOptions:
 
         if hasattr(args, "disable_ysql"):
             self.enable_ysql = not args.disable_ysql
+
+        if args.install_if_needed and not self.installation_dir:
+            installer = Installer()
+            installer.install()
+            self.installation_dir = installer.installation_dir
 
     def validate_daemon_type(self, daemon_type):
         if daemon_type not in DAEMON_TYPES:
@@ -292,10 +486,16 @@ class ClusterOptions:
             binary_dirs = [self.custom_binary_dir]
             logging.info("Using custom binaries path: {}".format(self.custom_binary_dir))
         else:
-            binary_dirs = [self.script_dir,
-                           self.build_bin_dir,
-                           os.path.join(self.build_bin_dir, '..', 'postgres', 'bin'),
-                           os.path.join(self.script_dir, '..', 'postgres', 'bin')]
+            binary_dirs = []
+            if self.installation_dir:
+                binary_dirs += [
+                    os.path.join(self.installation_dir, 'bin'),
+                    os.path.join(self.installation_dir, 'postgres', 'bin')
+                ]
+            binary_dirs += [self.script_dir,
+                            self.build_bin_dir,
+                            os.path.join(self.build_bin_dir, '..', 'postgres', 'bin'),
+                            os.path.join(self.script_dir, '..', 'postgres', 'bin')]
 
         for binary_dir in binary_dirs:
             path = os.path.join(binary_dir, binary_name)
@@ -388,7 +588,7 @@ class ClusterControl:
             "--binary_dir", default=None,
             help="Specify a custom directory in which to find the yugabyte binaries.")
         self.parser.add_argument(
-            "--data_dir", default=get_data_dir(),
+            "--data_dir", default=get_default_data_dir(),
             help="Specify a custom directory where to store data.")
         self.parser.add_argument(
             "--replication_factor", "--rf", default=1, type=int,
@@ -399,6 +599,12 @@ class ClusterControl:
         self.parser.add_argument(
             "--num_shards_per_tserver", default=2, type=int,
             help="Number of shards (tablets) to start per tablet server for each table.")
+
+        self.parser.add_argument(
+            "--install-if-needed",
+            action='store_true',
+            help="With this option, if YugaByte DB is not yet installed on the system, the latest "
+                 "version will be downloaded and installed automatically.")
 
         subparsers = {}
         for cmd_name, help in (
@@ -950,11 +1156,11 @@ class ClusterControl:
              'YB_ENABLED_IN_POSTGRES': '1'}):
             adjust_env_for_postgres()
 
-            tmp_pg_data_dir = os.path.join(get_data_dir(), 'yb-ctl_tmp_pg_data_{}'.format(''.join(
-                [random.choice('0123456789abcdef') for _ in range(32)])))
+            tmp_pg_data_dir = os.path.join(self.args.data_dir, 'yb-ctl_tmp_pg_data_{}'.format(
+                ''.join([random.choice('0123456789abcdef') for _ in range(32)])))
 
             try:
-                with open(os.path.join(get_data_dir(), "initdb.log"), 'w') as finitdb:
+                with open(os.path.join(self.args.data_dir, "initdb.log"), 'w') as finitdb:
                     subprocess.check_call([
                         initdb_binary_path,
                         '-D', tmp_pg_data_dir,

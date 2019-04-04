@@ -1,0 +1,6 @@
+.session.vim
+.session.vim.lock
+*.pyc
+*.sw?
+*.bak
+*.rej
