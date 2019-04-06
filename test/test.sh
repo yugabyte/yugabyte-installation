@@ -13,12 +13,21 @@ yb_data_dirs=(
   "$HOME/yugabyte-data"
 )
 
+log_heading() {
+  (
+    echo
+    echo "----------------------------------------------------------------------------------------"
+    echo "$@"
+    echo "----------------------------------------------------------------------------------------"
+    echo
+  ) >&2
+}
+
 cleanup() {
   local exit_code=$?
   if [[ $exit_code -ne 0 ]]; then
     log "^^^ SEE THE ERROR MESSAGE ABOVE ^^^"
-    log
-    log "Dumping all the log files below:"
+    log_heading "Dumping all the log files below:"
   fi
   for yb_data_dir in "${yb_data_dirs[@]}"; do
     if [[ -d $yb_data_dir ]]; then
@@ -27,18 +36,12 @@ cleanup() {
         -name "*.err" -or \
         \( -name "*.log" -and -not -wholename "*/tablet-*/*.log" \) |
       while read log_path; do
-        (
-          echo "----------------------------------------------------------------------------------"
-          echo "$log_path"
-          echo "----------------------------------------------------------------------------------"
-          echo
-          cat "$log_path"
-          echo
-        ) >&2
+        log_heading "$log_path"
+        cat "$log_path" >&2
       done
     fi
   done
-  echo "------------------------------------------------------------------------------------------"
+  log_heading "End of dumping various logs"
   if [[ $exit_code -ne 0 ]]; then
     echo "Scroll up past the various logs to where it says 'SEE THE ERROR MESSAGE'."
   fi

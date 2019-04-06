@@ -223,8 +223,9 @@ class Installer:
         'linux': '8469d847b87dcea2a4a13faab0bdba1bf73b683393530a2e8571cdd06cc71883'
     }
 
-    def __init__(self):
+    def __init__(self, only_find_existing=False):
         self.installation_dir = None
+        self.only_find_existing = only_find_existing
 
     def get_download_cache_dir(self):
         return os.path.join(get_home_dir(), '.cache', 'yugabyte', 'downloads')
@@ -232,7 +233,15 @@ class Installer:
     def get_software_installation_top_dir(self):
         return os.path.join(get_home_dir(), 'yugabyte-db-installation')
 
-    def install(self):
+    def install_or_find_existing(self):
+        """
+        Downloads/installs YugaByte DB, or only finds an existing installation, if
+        "only_find_existing" was set during this installer's creation.
+
+        Returns True in case YugaByte DB was installed or an existing installation was found.
+        Returns False only if only_find_existing is specified and no existing installation found.
+        Errors are still handled by raising exceptions.
+        """
         installation_top_dir = self.get_software_installation_top_dir()
         self.installation_dir = os.path.join(
                 installation_top_dir, 'yugabyte-' + Installer.YUGABYTE_DB_VERSION)
@@ -246,8 +255,11 @@ class Installer:
             # Already installed.
             logging.info("Found existing YugaByte DB installation at %s", self.installation_dir)
             # This will re-run the post-install script if it did not complete initially.
-            self.run_post_install_script()
-            return
+            return self.run_post_install_script()
+
+        if self.only_find_existing:
+            # No installation found, and we're not allowed to make any changes.
+            return False
 
         cache_dir = self.get_download_cache_dir()
         mkdir_p(cache_dir)
@@ -297,15 +309,23 @@ class Installer:
 
     def run_post_install_script(self):
         if not is_linux():
-            return
+            # No post_install.sh script on macOS.
+            return True
         post_install_script_path = os.path.join(
             self.installation_dir, 'bin', 'post_install.sh')
         post_install_completion_flag_path = post_install_script_path + '.completed'
         if os.path.exists(post_install_completion_flag_path):
             logging.debug(
-                "File %s already exists, meaning the post_install.sh script has already run",
+                "File %s already exists, meaning the post_install.sh script has already run.",
                 post_install_completion_flag_path)
-            return
+            return True
+        if self.only_find_existing:
+            logging.warning(
+                    "The post-install script did not complete successfully earlier in %s. Specify "
+                    "--install-if-needed to re-run it.",
+                    self.installation_dir)
+            return False
+
         logging.info("Running the post-installation script %s", post_install_script_path)
         process = subprocess.Popen(
                 post_install_script_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -485,17 +505,21 @@ class ClusterOptions:
 
         if args.install_if_needed and not self.installation_dir:
             installer = Installer()
-            installer.install()
-            self.installation_dir = installer.installation_dir
+            if installer.install_or_find_existing():
+                self.installation_dir = installer.installation_dir
 
         if not self.installation_dir:
             self.installation_dir = fallback_installation_dir
             if not self.installation_dir:
-                raise RuntimeError(
-                    "Failed to determine YugaByte DB installation directory. Directories "
-                    "considered:\n%s\nPlease specify --install-if-needed to download and install "
-                    "YugaByte DB automatically." %
-                    ("    " + "\n    ".join(self.installation_dirs_considered)))
+                installation_finder = Installer(only_find_existing=True)
+                if installation_finder.install_or_find_existing():
+                    self.installation_dir = installation_finder.installation_dir
+                if not self.installation_dir:
+                    raise RuntimeError(
+                        "Failed to determine YugaByte DB installation directory. Directories "
+                        "considered:\n%s\nPlease specify --install-if-needed to download and "
+                        "install YugaByte DB automatically." %
+                        ("    " + "\n    ".join(self.installation_dirs_considered)))
 
     def validate_daemon_type(self, daemon_type):
         if daemon_type not in DAEMON_TYPES:
@@ -1069,10 +1093,13 @@ class ClusterControl:
 
         self.start_helper(server_counts_map)
         self.modify_placement_info()
+
+        if self.options.installation_dir:
+            self.cluster_config["installation_dir"] = self.options.installation_dir
+        self.save_cluster_config()
+
         if self.is_postgres_enabled():
             self.run_cluster_wide_postgres_initdb()
-        self.cluster_config["installation_dir"] = self.args.installation_dir
-        self.save_cluster_config()
         print("Successfully created a new cluster.")
         if not DISABLE_CALLHOME_ENV_VAR_SET:
             print ("Congratulations on installing YugaByte DB Community Edition. " +
