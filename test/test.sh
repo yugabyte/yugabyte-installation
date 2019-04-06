@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
+
 set -euo pipefail
 
 export YB_PG_FALLBACK_SYSTEM_USER_NAME=$USER
 export YB_DISABLE_CALLHOME=1
+
+log() {
+  echo >&2 "[$( date +%Y-%m-%dT%H:%M:%S] ) $*"
+}
 
 yb_data_dirs=(
   "$HOME/yugabyte-data"
@@ -31,4 +36,28 @@ cleanup() {
 }
 
 trap cleanup EXIT
+
 bin/yb-ctl --install-if-needed create
+bin/yb-ctl stop
+bin/yb-ctl start
+bin/yb-ctl stop
+
+log "Testing putting this version of yb-ctl inside the installation directory"
+installation_dir=$( ls -t "$HOME/yugabyte-db-installation/yugabyte-"* | head -1 )
+( set -x; cp bin/yb-ctl "$installation_dir" )
+"$installation_dir/yb-ctl" start
+"$installation_dir/yb-ctl" stop
+
+log "Pretending we've just built the code and are running yb-ctl from the bin directory in the code"
+yb_src_root=$HOME/yugabyte-db-src-root
+submodule_bin_dir=$yb_src_root/submodules/yugabyte-installation/bin
+mkdir -p "$submodule_bin_dir"
+mkdir -p "$yb_src_root/build"
+yb_build_root=$yb_src_root/build/latest
+cp -R "$installation_dir" "$yb_build_root"
+
+if [[ $OSTYPE == linux* ]]; then
+  "$yb_build_root/bin/post_install.sh"
+fi
+"$submodule_bin_dir/yb-ctl" start
+"$submodule_bin_dir/yb-ctl" stop

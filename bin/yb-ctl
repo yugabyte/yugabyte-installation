@@ -193,15 +193,26 @@ def mkdir_p(dir_path):
         raise
 
 
-def is_yugabyte_db_installation_dir(top_dir):
-    for rel_path in [
-            'bin/yb-master',
-            'bin/yb-tserver',
-            'postgres/bin/postgres'
-            ]:
+def has_rel_paths(top_dir, rel_paths):
+    for rel_path in rel_paths:
         if not os.path.exists(os.path.join(top_dir, rel_path)):
             return False
     return True
+
+
+def is_yugabyte_db_installation_dir(top_dir):
+    """
+    Checks if the given directory is a viable YugaBYte DB installation directory. A build directory
+    with master/tserver/postgres binaries already built would match this definition.
+    """
+    if top_dir is None:
+        return False
+    return has_rel_paths(
+        top_dir, [
+            'bin/yb-master',
+            'bin/yb-tserver',
+            'postgres/bin/postgres'
+        ])
 
 
 class Installer:
@@ -370,16 +381,23 @@ class ClusterOptions:
         self.script_dir = os.path.dirname(os.path.realpath(__file__))
 
         self.installation_dir = None
-        if is_yugabyte_db_installation_dir(os.path.dirname(self.script_dir)):
-            self.installation_dir = os.path.dirname(self.script_dir)
+        yb_src_root_candidate = os.path.dirname(os.path.dirname(os.path.dirname(self.script_dir)))
 
-        if os.environ.get('YB_USE_EXTERNAL_BUILD_ROOT') == '1':
-            build_dir = os.path.dirname(self.script_dir) + '__build'
-        else:
-            build_dir = os.path.join(self.script_dir, "..", "build")
+        # "YB_USE_EXTERNAL_BUILD_ROOT" is a special way to place the build directory. This is only
+        # relevant when running yb-ctl from the yugabyte-db source tree.
+        use_external_build_root = os.environ.get('YB_USE_EXTERNAL_BUILD_ROOT') == '1'
 
-        self.build_bin_dir = os.path.realpath(
-                os.path.join(build_dir, "latest", "bin"))
+        for installation_dir_candidate in [
+                # yb-ctl being run from the "bin" directory of an installation.
+                os.path.dirname(self.script_dir),
+                # yb-ctl being run from $YB_SRC_ROOT/submodules/yugabyte-installation/bin 
+                None if use_external_build_root else os.path.join(
+                    yb_src_root_candidate,  'build', 'latest'),
+                os.path.join(yb_src_root_candidate + '__build', 'latest')
+                ]:
+            if is_yugabyte_db_installation_dir(installation_dir_candidate):
+                self.installation_dir = installation_dir_candidate
+                break
 
         self.drives = ["disk-{}".format(i) for i in xrange(1, 3)]
 
@@ -486,16 +504,10 @@ class ClusterOptions:
             binary_dirs = [self.custom_binary_dir]
             logging.info("Using custom binaries path: {}".format(self.custom_binary_dir))
         else:
-            binary_dirs = []
-            if self.installation_dir:
-                binary_dirs += [
-                    os.path.join(self.installation_dir, 'bin'),
-                    os.path.join(self.installation_dir, 'postgres', 'bin')
-                ]
-            binary_dirs += [self.script_dir,
-                            self.build_bin_dir,
-                            os.path.join(self.build_bin_dir, '..', 'postgres', 'bin'),
-                            os.path.join(self.script_dir, '..', 'postgres', 'bin')]
+            binary_dirs = [
+                os.path.join(self.installation_dir, 'bin'),
+                os.path.join(self.installation_dir, 'postgres', 'bin')
+            ]
 
         for binary_dir in binary_dirs:
             path = os.path.join(binary_dir, binary_name)

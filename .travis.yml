@@ -11,4 +11,4 @@ matrix:
         - os: osx
           language: generic
 
-script: test/test.sh
+script: make test
