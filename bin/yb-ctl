@@ -225,7 +225,6 @@ class Installer:
 
     def __init__(self):
         self.installation_dir = None
-        pass
 
     def get_download_cache_dir(self):
         return os.path.join(get_home_dir(), '.cache', 'yugabyte', 'downloads')
@@ -258,7 +257,7 @@ class Installer:
         download_name = download_url.rsplit('/', 1)[-1]
         download_dest_path = os.path.join(cache_dir, download_name)
         expected_sha256_sum = Installer.SHA256_SUM_BY_OS[os_family]
-        
+
         need_to_download = True
         if os.path.exists(download_dest_path):
             logging.info("File %s already exists, validating the checksum", download_dest_path)
@@ -272,7 +271,7 @@ class Installer:
                     "Removing the existing file and re-downloading.",
                     download_dest_path, existing_sha256_sum, expected_sha256_sum)
                 os.remove(download_dest_path)
-    
+
         if need_to_download:
             downloader = urllib.FancyURLopener()
             logging.info("Downloading %s to %s", download_url, download_dest_path)
@@ -387,14 +386,16 @@ class ClusterOptions:
         # relevant when running yb-ctl from the yugabyte-db source tree.
         use_external_build_root = os.environ.get('YB_USE_EXTERNAL_BUILD_ROOT') == '1'
 
-        for installation_dir_candidate in [
-                # yb-ctl being run from the "bin" directory of an installation.
-                os.path.dirname(self.script_dir),
-                # yb-ctl being run from $YB_SRC_ROOT/submodules/yugabyte-installation/bin 
-                None if use_external_build_root else os.path.join(
-                    yb_src_root_candidate,  'build', 'latest'),
-                os.path.join(yb_src_root_candidate + '__build', 'latest')
-                ]:
+        self.installation_dirs_considered = [d for d in [
+            # yb-ctl being run from the "bin" directory of an installation.
+            os.path.dirname(self.script_dir),
+            # yb-ctl being run from $YB_SRC_ROOT/submodules/yugabyte-installation/bin
+            None if use_external_build_root else os.path.join(
+                yb_src_root_candidate,  'build', 'latest'),
+            os.path.join(yb_src_root_candidate + '__build', 'latest')
+        ] if d is not None]
+
+        for installation_dir_candidate in self.installation_dirs_considered:
             if is_yugabyte_db_installation_dir(installation_dir_candidate):
                 self.installation_dir = installation_dir_candidate
                 break
@@ -484,6 +485,14 @@ class ClusterOptions:
             installer = Installer()
             installer.install()
             self.installation_dir = installer.installation_dir
+
+        if not self.installation_dir:
+            raise RuntimeError(
+                "Failed to determine YugaByte DB installation directory. Directories "
+                "considered:\n%s\nPlease specify --install-if-needed to download and install "
+                "YugaByte DB automatically.",
+                "    " + "\n    ".join(self.installation_dirs_considered))
+
 
     def validate_daemon_type(self, daemon_type):
         if daemon_type not in DAEMON_TYPES:
@@ -1171,18 +1180,26 @@ class ClusterControl:
             tmp_pg_data_dir = os.path.join(self.args.data_dir, 'yb-ctl_tmp_pg_data_{}'.format(
                 ''.join([random.choice('0123456789abcdef') for _ in range(32)])))
 
+            initdb_log_path = os.path.join(self.args.data_dir, "initdb.log")
+            if os.path.exists(initdb_log_path):
+                os.remove(initdb_log_path)
             try:
-                with open(os.path.join(self.args.data_dir, "initdb.log"), 'w') as finitdb:
+                with open(initdb_log_path, 'w') as initdb_stdout_file:
                     subprocess.check_call([
                         initdb_binary_path,
                         '-D', tmp_pg_data_dir,
                         '-U', 'postgres'
-                    ], stdout=finitdb, stderr=subprocess.STDOUT)
+                    ], stdout=initdb_stdout_file, stderr=subprocess.STDOUT)
             finally:
                 if os.path.exists(tmp_pg_data_dir):
                     logging.info("Deleting temporary PostgreSQL data directory: %s",
                                  tmp_pg_data_dir)
                     shutil.rmtree(tmp_pg_data_dir, ignore_errors=True)
+                if os.path.exists(initdb_log_path):
+                    logging.info("initdb log file (from %s):", initdb_log_path)
+                    with open(initdb_log_path) as initdb_log_input_file:
+                        for line in initdb_log_input_file:
+                            logging.info(line)
 
         logging.info(
             "Successfully ran initdb to initialize PostgreSQL data in the YugaByte cluster")
