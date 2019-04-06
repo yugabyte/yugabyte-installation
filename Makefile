@@ -2,5 +2,8 @@
 
 .PHONY: test
 
-test:
+test: pycodestyle
 	test/test.sh
+
+pycodestyle:
+	pycodestyle bin/yb-ctl

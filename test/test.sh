@@ -15,23 +15,33 @@ yb_data_dirs=(
 
 cleanup() {
   local exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
+    log "^^^ SEE THE ERROR MESSAGE ABOVE ^^^"
+    log
+    log "Dumping all the log files below:"
+  fi
   for yb_data_dir in "${yb_data_dirs[@]}"; do
     if [[ -d $yb_data_dir ]]; then
       find "$yb_data_dir" \
         -name "*.out" -or \
         -name "*.err" -or \
-        \( -name "*.log" -and -not -wholename "*/tablet-*/*.log" \) | while read log_path; do
-
-        echo "------------------------------------------------------------------------------------"
-        echo "$log_path"
-        echo "------------------------------------------------------------------------------------"
-        echo
-        cat "$log_path"
-        echo
-
+        \( -name "*.log" -and -not -wholename "*/tablet-*/*.log" \) |
+      while read log_path; do
+        (
+          echo "----------------------------------------------------------------------------------"
+          echo "$log_path"
+          echo "----------------------------------------------------------------------------------"
+          echo
+          cat "$log_path"
+          echo
+        ) >&2
       done
     fi
   done
+  echo "------------------------------------------------------------------------------------------"
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Scroll up past the various logs to where it says 'SEE THE ERROR MESSAGE'."
+  fi
   exit "$exit_code"
 }
 
@@ -44,9 +54,12 @@ bin/yb-ctl stop
 
 log "Testing putting this version of yb-ctl inside the installation directory"
 installation_dir=$( ls -t "$HOME/yugabyte-db-installation/yugabyte-"* | head -1 )
-( set -x; cp bin/yb-ctl "$installation_dir" )
-"$installation_dir/yb-ctl" start
-"$installation_dir/yb-ctl" stop
+(
+  set -x
+  cp bin/yb-ctl "$installation_dir"
+  "$installation_dir/yb-ctl" start
+  "$installation_dir/yb-ctl" stop
+)
 
 log "Pretending we've just built the code and are running yb-ctl from the bin directory in the code"
 yb_src_root=$HOME/yugabyte-db-src-root
@@ -59,5 +72,8 @@ cp -R "$installation_dir" "$yb_build_root"
 if [[ $OSTYPE == linux* ]]; then
   "$yb_build_root/bin/post_install.sh"
 fi
-"$submodule_bin_dir/yb-ctl" start
-"$submodule_bin_dir/yb-ctl" stop
+(
+  set -x
+  "$submodule_bin_dir/yb-ctl" start
+  "$submodule_bin_dir/yb-ctl" stop
+)

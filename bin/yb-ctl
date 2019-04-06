@@ -175,7 +175,7 @@ def download_file(url, dest_path):
                 return sha256_hash.hexdigest()
             finally:
                 remote_file.close()
-    except:
+    except:  # noqa
         if os.path.exists(dest_path):
             logging.warn("Deleting the unfinished download: %s", dest_path)
             os.remove(dest_path)
@@ -243,9 +243,11 @@ class Installer:
                     "installation directory. Remove that directory and re-run the script "
                     "to re-install YugaByte DB.", installation_dir)
                 sys.exit(1)
-            logging.info("Found existing YugaByte DB installation at %s", self.installation_dir)
             # Already installed.
+            logging.info("Found existing YugaByte DB installation at %s", self.installation_dir)
+            # This will re-run the post-install script if it did not complete initially.
             self.run_post_install_script()
+            return
 
         cache_dir = self.get_download_cache_dir()
         mkdir_p(cache_dir)
@@ -289,7 +291,7 @@ class Installer:
             cwd=installation_top_dir)
         if not os.path.isdir(self.installation_dir):
             raise RuntimeError(
-                    "Extracting %s in directory %s failed to produce directory %s" %(
+                    "Extracting %s in directory %s failed to produce directory %s" % (
                             download_dest_path, installation_top_dir, self.installation_dir))
         self.run_post_install_script()
 
@@ -494,7 +496,6 @@ class ClusterOptions:
                     "considered:\n%s\nPlease specify --install-if-needed to download and install "
                     "YugaByte DB automatically." %
                     ("    " + "\n    ".join(self.installation_dirs_considered)))
-
 
     def validate_daemon_type(self, daemon_type):
         if daemon_type not in DAEMON_TYPES:
