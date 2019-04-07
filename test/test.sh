@@ -56,7 +56,8 @@ bin/yb-ctl start
 bin/yb-ctl stop
 
 log "Testing putting this version of yb-ctl inside the installation directory"
-installation_dir=$( ls -t "$HOME/yugabyte-db-installation/yugabyte-"* | head -1 )
+installation_dir=$( ls -td "$HOME/yugabyte-db/yugabyte-"* | head -1 )
+log "YugaByte DB was automatically installed into directory: $installation_dir"
 (
   set -x
   cp bin/yb-ctl "$installation_dir"

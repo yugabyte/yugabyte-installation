@@ -231,7 +231,7 @@ class Installer:
         return os.path.join(get_home_dir(), '.cache', 'yugabyte', 'downloads')
 
     def get_software_installation_top_dir(self):
-        return os.path.join(get_home_dir(), 'yugabyte-db-installation')
+        return os.path.join(get_home_dir(), 'yugabyte-db')
 
     def install_or_find_existing(self):
         """
@@ -1217,6 +1217,7 @@ class ClusterControl:
             initdb_log_path = os.path.join(self.args.data_dir, "initdb.log")
             if os.path.exists(initdb_log_path):
                 os.remove(initdb_log_path)
+            succeeded = False
             try:
                 with open(initdb_log_path, 'w') as initdb_stdout_file:
                     subprocess.check_call([
@@ -1224,16 +1225,17 @@ class ClusterControl:
                         '-D', tmp_pg_data_dir,
                         '-U', 'postgres'
                     ], stdout=initdb_stdout_file, stderr=subprocess.STDOUT)
+                succeeded = True
             finally:
                 if os.path.exists(tmp_pg_data_dir):
                     logging.info("Deleting temporary PostgreSQL data directory: %s",
                                  tmp_pg_data_dir)
                     shutil.rmtree(tmp_pg_data_dir, ignore_errors=True)
-                if os.path.exists(initdb_log_path):
+                if not succeeded and os.path.exists(initdb_log_path):
                     logging.info("initdb log file (from %s):", initdb_log_path)
                     with open(initdb_log_path) as initdb_log_input_file:
                         for line in initdb_log_input_file:
-                            logging.info(line)
+                            logging.info(line.rstrip())
 
         logging.info(
             "Successfully ran initdb to initialize PostgreSQL data in the YugaByte cluster")
