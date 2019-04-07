@@ -48,7 +48,11 @@ cleanup() {
   exit "$exit_code"
 }
 
-if [[ $OSTYPE == darwin* && ${TRAVIS:-} == "true" ]]; then
+log "OSTYPE: $OSTYPE"
+log "USER: $USER"
+log "TRAVIS: ${TRAVIS:-undefined}"
+
+if [[ $OSTYPE == darwin* && $USER == "travis" ]]; then
   pip install --user requirements.txt
 fi
 
