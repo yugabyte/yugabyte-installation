@@ -48,6 +48,10 @@ cleanup() {
   exit "$exit_code"
 }
 
+if [[ $OSTYPE == darwin* ]]; then
+  pip install --user requirements.txt
+fi
+
 trap cleanup EXIT
 
 bin/yb-ctl --install-if-needed create

@@ -735,7 +735,7 @@ class ClusterControl:
             while wait_count < MAX_WAIT_ITERS:
                 try:
                     subprocess.check_call(cmd)
-                    print ("Successfully modified placement info.")
+                    print("Successfully modified placement info.")
                     return
                 except subprocess.CalledProcessError:
                     wait_count += 1
@@ -1102,10 +1102,10 @@ class ClusterControl:
             self.run_cluster_wide_postgres_initdb()
         print("Successfully created a new cluster.")
         if not DISABLE_CALLHOME_ENV_VAR_SET:
-            print ("Congratulations on installing YugaByte DB Community Edition. " +
-                   "We'd like to welcome you to the community with a free t-shirt " +
-                   "and pack of stickers! " +
-                   "Please claim your reward here: https://www.yugabyte.com/community-rewards/")
+            print("Congratulations on installing YugaByte DB Community Edition. " +
+                  "We'd like to welcome you to the community with a free t-shirt " +
+                  "and pack of stickers! " +
+                  "Please claim your reward here: https://www.yugabyte.com/community-rewards/")
 
     # Starts as well as creates. Check if the cluster exists.
     # If it does not create it else start the individual daemons.
@@ -1196,9 +1196,9 @@ class ClusterControl:
             cmd_setup_redis_table, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         result, _ = proc.communicate()
         if proc.returncode:
-            print (result)
+            print(result)
             raise RuntimeError("Failed to Setup Redis.")
-        print ("Setup Redis successful.")
+        print("Setup Redis successful.")
 
     def run_cluster_wide_postgres_initdb(self):
         self.wait_for_cluster_or_raise()
