@@ -6,4 +6,4 @@ test: pycodestyle
 	test/test.sh
 
 pycodestyle:
-	pycodestyle --config=pycodstyle.conf bin/yb-ctl
+	pycodestyle --config=pycodestyle.conf bin/yb-ctl
