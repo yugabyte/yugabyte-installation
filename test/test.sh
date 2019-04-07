@@ -69,6 +69,7 @@ log "Pretending we've just built the code and are running yb-ctl from the bin di
 yb_src_root=$HOME/yugabyte-db-src-root
 submodule_bin_dir=$yb_src_root/submodules/yugabyte-installation/bin
 mkdir -p "$submodule_bin_dir"
+cp bin/yb-ctl "$submodule_bin_dir"
 mkdir -p "$yb_src_root/build"
 yb_build_root=$yb_src_root/build/latest
 cp -R "$installation_dir" "$yb_build_root"
@@ -81,3 +82,5 @@ fi
   "$submodule_bin_dir/yb-ctl" start
   "$submodule_bin_dir/yb-ctl" stop
 )
+
+log_heading "TESTS SUCCEEDED"
