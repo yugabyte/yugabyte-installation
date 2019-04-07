@@ -52,7 +52,10 @@ log "OSTYPE: $OSTYPE"
 log "USER: $USER"
 log "TRAVIS: ${TRAVIS:-undefined}"
 
-pycodestyle --config=pycodestyle.conf bin/yb-ctl
+if [[ ${TRAVIS:-} != "true" || $OSTYPE != darwin* ]]; then
+  # We don't run pycodestyle on macOS on Travis CI.
+  pycodestyle --config=pycodestyle.conf bin/yb-ctl
+fi
 
 trap cleanup EXIT
 
