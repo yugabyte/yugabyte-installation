@@ -48,7 +48,7 @@ cleanup() {
   exit "$exit_code"
 }
 
-if [[ $OSTYPE == darwin* ]]; then
+if [[ $OSTYPE == darwin* && ${TRAVIS:-} == "true" ]]; then
   pip install --user requirements.txt
 fi
 
