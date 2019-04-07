@@ -2,8 +2,6 @@
 
 .PHONY: test
 
-test: pycodestyle
+test:
 	test/test.sh
 
-pycodestyle:
-	pycodestyle --config=pycodestyle.conf bin/yb-ctl

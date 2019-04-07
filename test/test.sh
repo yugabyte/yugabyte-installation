@@ -55,6 +55,7 @@ log "TRAVIS: ${TRAVIS:-undefined}"
 if [[ $OSTYPE == darwin* && $USER == "travis" ]]; then
   pip install --user requirements.txt
 fi
+pycodestyle --config=pycodestyle.conf bin/yb-ctl
 
 trap cleanup EXIT
 
