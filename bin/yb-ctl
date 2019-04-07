@@ -175,7 +175,7 @@ def download_file(url, dest_path):
                 return sha256_hash.hexdigest()
             finally:
                 remote_file.close()
-    except:
+    except:  # noqa
         if os.path.exists(dest_path):
             logging.warn("Deleting the unfinished download: %s", dest_path)
             os.remove(dest_path)
@@ -193,15 +193,26 @@ def mkdir_p(dir_path):
         raise
 
 
-def is_yugabyte_db_installation_dir(top_dir):
-    for rel_path in [
-            'bin/yb-master',
-            'bin/yb-tserver',
-            'postgres/bin/postgres'
-            ]:
+def has_rel_paths(top_dir, rel_paths):
+    for rel_path in rel_paths:
         if not os.path.exists(os.path.join(top_dir, rel_path)):
             return False
     return True
+
+
+def is_yugabyte_db_installation_dir(top_dir):
+    """
+    Checks if the given directory is a viable YugaByte DB installation directory. A build directory
+    with master/tserver/postgres binaries already built would match this definition.
+    """
+    if top_dir is None:
+        return False
+    return has_rel_paths(
+        top_dir, [
+            'bin/yb-master',
+            'bin/yb-tserver',
+            'postgres/bin/postgres'
+        ])
 
 
 class Installer:
@@ -212,17 +223,25 @@ class Installer:
         'linux': '8469d847b87dcea2a4a13faab0bdba1bf73b683393530a2e8571cdd06cc71883'
     }
 
-    def __init__(self):
+    def __init__(self, only_find_existing=False):
         self.installation_dir = None
-        pass
+        self.only_find_existing = only_find_existing
 
     def get_download_cache_dir(self):
         return os.path.join(get_home_dir(), '.cache', 'yugabyte', 'downloads')
 
     def get_software_installation_top_dir(self):
-        return os.path.join(get_home_dir(), 'yugabyte-db-installation')
+        return os.path.join(get_home_dir(), 'yugabyte-db')
 
-    def install(self):
+    def install_or_find_existing(self):
+        """
+        Downloads/installs YugaByte DB, or only finds an existing installation, if
+        "only_find_existing" was set during this installer's creation.
+
+        Returns True in case YugaByte DB was installed or an existing installation was found.
+        Returns False only if only_find_existing is specified and no existing installation found.
+        Errors are still handled by raising exceptions.
+        """
         installation_top_dir = self.get_software_installation_top_dir()
         self.installation_dir = os.path.join(
                 installation_top_dir, 'yugabyte-' + Installer.YUGABYTE_DB_VERSION)
@@ -233,10 +252,14 @@ class Installer:
                     "installation directory. Remove that directory and re-run the script "
                     "to re-install YugaByte DB.", installation_dir)
                 sys.exit(1)
-            logging.info("Found existing YugaByte DB installation at %s", self.installation_dir)
             # Already installed.
-            self.run_post_install_script()
-            return
+            logging.info("Found existing YugaByte DB installation at %s", self.installation_dir)
+            # This will re-run the post-install script if it did not complete initially.
+            return self.run_post_install_script()
+
+        if self.only_find_existing:
+            # No installation found, and we're not allowed to make any changes.
+            return False
 
         cache_dir = self.get_download_cache_dir()
         mkdir_p(cache_dir)
@@ -247,7 +270,7 @@ class Installer:
         download_name = download_url.rsplit('/', 1)[-1]
         download_dest_path = os.path.join(cache_dir, download_name)
         expected_sha256_sum = Installer.SHA256_SUM_BY_OS[os_family]
-        
+
         need_to_download = True
         if os.path.exists(download_dest_path):
             logging.info("File %s already exists, validating the checksum", download_dest_path)
@@ -261,7 +284,7 @@ class Installer:
                     "Removing the existing file and re-downloading.",
                     download_dest_path, existing_sha256_sum, expected_sha256_sum)
                 os.remove(download_dest_path)
-    
+
         if need_to_download:
             downloader = urllib.FancyURLopener()
             logging.info("Downloading %s to %s", download_url, download_dest_path)
@@ -280,21 +303,29 @@ class Installer:
             cwd=installation_top_dir)
         if not os.path.isdir(self.installation_dir):
             raise RuntimeError(
-                    "Extracting %s in directory %s failed to produce directory %s" %(
+                    "Extracting %s in directory %s failed to produce directory %s" % (
                             download_dest_path, installation_top_dir, self.installation_dir))
         self.run_post_install_script()
 
     def run_post_install_script(self):
         if not is_linux():
-            return
+            # No post_install.sh script on macOS.
+            return True
         post_install_script_path = os.path.join(
             self.installation_dir, 'bin', 'post_install.sh')
         post_install_completion_flag_path = post_install_script_path + '.completed'
         if os.path.exists(post_install_completion_flag_path):
             logging.debug(
-                "File %s already exists, meaning the post_install.sh script has already run",
+                "File %s already exists, meaning the post_install.sh script has already run.",
                 post_install_completion_flag_path)
-            return
+            return True
+        if self.only_find_existing:
+            logging.warning(
+                    "The post-install script did not complete successfully earlier in %s. Specify "
+                    "--install-if-needed to re-run it.",
+                    self.installation_dir)
+            return False
+
         logging.info("Running the post-installation script %s", post_install_script_path)
         process = subprocess.Popen(
                 post_install_script_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -307,6 +338,7 @@ class Installer:
         logging.info("Successfully ran the post-installation script")
 
         with open(post_install_completion_flag_path, 'w'):
+            # Write an empty file.
             pass
 
 
@@ -370,18 +402,27 @@ class ClusterOptions:
         self.script_dir = os.path.dirname(os.path.realpath(__file__))
 
         self.installation_dir = None
-        if is_yugabyte_db_installation_dir(os.path.dirname(self.script_dir)):
-            self.installation_dir = os.path.dirname(self.script_dir)
+        yb_src_root_candidate = os.path.dirname(os.path.dirname(os.path.dirname(self.script_dir)))
 
-        if os.environ.get('YB_USE_EXTERNAL_BUILD_ROOT') == '1':
-            build_dir = os.path.dirname(self.script_dir) + '__build'
-        else:
-            build_dir = os.path.join(self.script_dir, "..", "build")
+        # "YB_USE_EXTERNAL_BUILD_ROOT" is a special way to place the build directory. This is only
+        # relevant when running yb-ctl from the yugabyte-db source tree.
+        use_external_build_root = os.environ.get('YB_USE_EXTERNAL_BUILD_ROOT') == '1'
 
-        self.build_bin_dir = os.path.realpath(
-                os.path.join(build_dir, "latest", "bin"))
+        self.installation_dirs_considered = [d for d in [
+            # yb-ctl being run from the "bin" directory of an installation.
+            os.path.dirname(self.script_dir),
+            # yb-ctl being run from $YB_SRC_ROOT/submodules/yugabyte-installation/bin
+            None if use_external_build_root else os.path.join(
+                yb_src_root_candidate,  'build', 'latest'),
+            os.path.join(yb_src_root_candidate + '__build', 'latest')
+        ] if d is not None]
 
-        self.drives = ["disk-{}".format(i) for i in xrange(1, 3)]
+        for installation_dir_candidate in self.installation_dirs_considered:
+            if is_yugabyte_db_installation_dir(installation_dir_candidate):
+                self.installation_dir = installation_dir_candidate
+                break
+
+        self.drives = ["disk-{}".format(i) for i in range(1, 3)]
 
         self.placement_cloud = "cloud"
         self.placement_region = "region"
@@ -422,7 +463,7 @@ class ClusterOptions:
         flags = [] if flag_args is None else flag_args.split(",")
         return [item.strip() for item in flags]
 
-    def update_options_from_args(self, args):
+    def update_options_from_args(self, args, fallback_installation_dir=None):
         self.replication_factor = args.replication_factor
         self.custom_binary_dir = args.binary_dir
         self.cluster_base_dir = args.data_dir
@@ -464,8 +505,21 @@ class ClusterOptions:
 
         if args.install_if_needed and not self.installation_dir:
             installer = Installer()
-            installer.install()
-            self.installation_dir = installer.installation_dir
+            if installer.install_or_find_existing():
+                self.installation_dir = installer.installation_dir
+
+        if not self.installation_dir:
+            self.installation_dir = fallback_installation_dir
+            if not self.installation_dir:
+                installation_finder = Installer(only_find_existing=True)
+                if installation_finder.install_or_find_existing():
+                    self.installation_dir = installation_finder.installation_dir
+                if not self.installation_dir:
+                    raise RuntimeError(
+                        "Failed to determine YugaByte DB installation directory. Directories "
+                        "considered:\n%s\nPlease specify --install-if-needed to download and "
+                        "install YugaByte DB automatically." %
+                        ("    " + "\n    ".join(self.installation_dirs_considered)))
 
     def validate_daemon_type(self, daemon_type):
         if daemon_type not in DAEMON_TYPES:
@@ -486,16 +540,10 @@ class ClusterOptions:
             binary_dirs = [self.custom_binary_dir]
             logging.info("Using custom binaries path: {}".format(self.custom_binary_dir))
         else:
-            binary_dirs = []
-            if self.installation_dir:
-                binary_dirs += [
-                    os.path.join(self.installation_dir, 'bin'),
-                    os.path.join(self.installation_dir, 'postgres', 'bin')
-                ]
-            binary_dirs += [self.script_dir,
-                            self.build_bin_dir,
-                            os.path.join(self.build_bin_dir, '..', 'postgres', 'bin'),
-                            os.path.join(self.script_dir, '..', 'postgres', 'bin')]
+            binary_dirs = [
+                os.path.join(self.installation_dir, 'bin'),
+                os.path.join(self.installation_dir, 'postgres', 'bin')
+            ]
 
         for binary_dir in binary_dirs:
             path = os.path.join(binary_dir, binary_name)
@@ -516,6 +564,9 @@ class ClusterOptions:
         port_str = str(self.base_ports[daemon_id.daemon_type][port_type])
         base_local_url = daemon_id.get_ip_address()
         return port_str if not include_base_url else "{}:{}".format(base_local_url, port_str)
+
+# End of ClusterOptions
+# -------------------------------------------------------------------------------------------------
 
 
 class ClusterControl:
@@ -548,7 +599,7 @@ class ClusterControl:
         :return: the path to a "cluster configuration file" that holds various options specified
                  at cluster creation time, e.g. whether PostgreSQL is enabled.
         """
-        return os.path.join(self.options.cluster_base_dir, 'cluster_config.json')
+        return os.path.join(self.args.data_dir, 'cluster_config.json')
 
     def load_cluster_config(self):
         config_file_path = self.get_cluster_config_file_path()
@@ -565,8 +616,8 @@ class ClusterControl:
             json.dump(self.cluster_config, config_file)
 
     def is_postgres_enabled(self):
-        return self.cluster_config.get("enable_postgres")\
-               or self.cluster_config.get("enable_ysql") or self.options.enable_ysql
+        return (self.cluster_config.get("enable_postgres") or
+                self.cluster_config.get("enable_ysql") or self.options.enable_ysql)
 
     @staticmethod
     def add_extra_flags_arguments(subparser):
@@ -684,7 +735,7 @@ class ClusterControl:
             while wait_count < MAX_WAIT_ITERS:
                 try:
                     subprocess.check_call(cmd)
-                    print ("Successfully modified placement info.")
+                    print("Successfully modified placement info.")
                     return
                 except subprocess.CalledProcessError:
                     wait_count += 1
@@ -953,7 +1004,7 @@ class ClusterControl:
         while wait_count < MAX_WAIT_ITERS and (time.time() - start_time <= MAX_WAIT_SECONDS):
             try:
                 num_alive_ts = sum([self.get_pid(DaemonId(DAEMON_TYPE_TSERVER, i)) is not None
-                                    for i in xrange(1, max_num_tservers + 1)])
+                                    for i in range(1, max_num_tservers + 1)])
                 logging.info("Waiting until we have enough tablet servers (currently %d)",
                              num_alive_ts)
                 # TODO: enhance this to tell us live vs dead.
@@ -1042,15 +1093,19 @@ class ClusterControl:
 
         self.start_helper(server_counts_map)
         self.modify_placement_info()
+
+        if self.options.installation_dir:
+            self.cluster_config["installation_dir"] = self.options.installation_dir
+        self.save_cluster_config()
+
         if self.is_postgres_enabled():
             self.run_cluster_wide_postgres_initdb()
-        self.save_cluster_config()
-        print ("Successfully created a new cluster.")
+        print("Successfully created a new cluster.")
         if not DISABLE_CALLHOME_ENV_VAR_SET:
-            print ("Congratulations on installing YugaByte DB Community Edition. " +
-                   "We'd like to welcome you to the community with a free t-shirt " +
-                   "and pack of stickers! " +
-                   "Please claim your reward here: https://www.yugabyte.com/community-rewards/")
+            print("Congratulations on installing YugaByte DB Community Edition. " +
+                  "We'd like to welcome you to the community with a free t-shirt " +
+                  "and pack of stickers! " +
+                  "Please claim your reward here: https://www.yugabyte.com/community-rewards/")
 
     # Starts as well as creates. Check if the cluster exists.
     # If it does not create it else start the individual daemons.
@@ -1141,9 +1196,9 @@ class ClusterControl:
             cmd_setup_redis_table, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         result, _ = proc.communicate()
         if proc.returncode:
-            print (result)
+            print(result)
             raise RuntimeError("Failed to Setup Redis.")
-        print ("Setup Redis successful.")
+        print("Setup Redis successful.")
 
     def run_cluster_wide_postgres_initdb(self):
         self.wait_for_cluster_or_raise()
@@ -1159,18 +1214,28 @@ class ClusterControl:
             tmp_pg_data_dir = os.path.join(self.args.data_dir, 'yb-ctl_tmp_pg_data_{}'.format(
                 ''.join([random.choice('0123456789abcdef') for _ in range(32)])))
 
+            initdb_log_path = os.path.join(self.args.data_dir, "initdb.log")
+            if os.path.exists(initdb_log_path):
+                os.remove(initdb_log_path)
+            succeeded = False
             try:
-                with open(os.path.join(self.args.data_dir, "initdb.log"), 'w') as finitdb:
+                with open(initdb_log_path, 'w') as initdb_stdout_file:
                     subprocess.check_call([
                         initdb_binary_path,
                         '-D', tmp_pg_data_dir,
                         '-U', 'postgres'
-                    ], stdout=finitdb, stderr=subprocess.STDOUT)
+                    ], stdout=initdb_stdout_file, stderr=subprocess.STDOUT)
+                succeeded = True
             finally:
                 if os.path.exists(tmp_pg_data_dir):
                     logging.info("Deleting temporary PostgreSQL data directory: %s",
                                  tmp_pg_data_dir)
                     shutil.rmtree(tmp_pg_data_dir, ignore_errors=True)
+                if not succeeded and os.path.exists(initdb_log_path):
+                    logging.info("initdb log file (from %s):", initdb_log_path)
+                    with open(initdb_log_path) as initdb_log_input_file:
+                        for line in initdb_log_input_file:
+                            logging.info(line.rstrip())
 
         logging.info(
             "Successfully ran initdb to initialize PostgreSQL data in the YugaByte cluster")
@@ -1181,11 +1246,15 @@ class ClusterControl:
 
     def run(self):
         self.args = self.parser.parse_args()
-        self.options.update_options_from_args(self.args)
 
         # Load cluster configuration for the non-creation case -- however, we will override
         # this configuration if the command is "create".
         self.load_cluster_config()
+
+        self.options.update_options_from_args(
+                self.args,
+                fallback_installation_dir=self.cluster_config.get("installation_dir"))
+
         self.args.func()
 
 
