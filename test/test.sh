@@ -53,7 +53,9 @@ log "USER: $USER"
 log "TRAVIS: ${TRAVIS:-undefined}"
 
 if [[ $OSTYPE == darwin* && $USER == "travis" ]]; then
-  pip install --user requirements.txt
+  python -m virtualenv venv
+  . venv/bin/activate
+  pip install requirements.txt
 fi
 pycodestyle --config=pycodestyle.conf bin/yb-ctl
 
