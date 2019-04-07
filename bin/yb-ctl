@@ -202,7 +202,7 @@ def has_rel_paths(top_dir, rel_paths):
 
 def is_yugabyte_db_installation_dir(top_dir):
     """
-    Checks if the given directory is a viable YugaBYte DB installation directory. A build directory
+    Checks if the given directory is a viable YugaByte DB installation directory. A build directory
     with master/tserver/postgres binaries already built would match this definition.
     """
     if top_dir is None:
