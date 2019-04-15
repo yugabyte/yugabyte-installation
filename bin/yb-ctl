@@ -1095,10 +1095,10 @@ class ClusterControl:
                 # TODO: do we want this??
                 # info_list.append(("data path[{}]".format(idx), data_path))
 
-            print ("-" * 100)
+            print("-" * 100)
             for k, v in info_list:
-                print ("| {:20}: {:<74} |".format(k, v))
-            print ("-" * 100)
+                print("| {:20}: {:<74} |".format(k, v))
+            print("-" * 100)
 
     def for_all_daemons(self, fn, server_counts_map=None):
         """
