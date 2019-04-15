@@ -386,8 +386,7 @@ class DaemonId:
         return self.daemon_type == DAEMON_TYPE_TSERVER
 
     def get_ip_address(self):
-        # return get_local_ip(self.index)
-        return "yb-{}-n{}".format(self.daemon_type, self.index)
+        return get_local_ip(self.index)
 
     def supports_placement(self):
         return self.daemon_type in [DAEMON_TYPE_MASTER, DAEMON_TYPE_TSERVER]
@@ -850,7 +849,7 @@ class ClusterControl:
             "--yb_num_shards_per_tserver={}".format(self.options.num_shards_per_tserver),
             "--redis_proxy_bind_address=" + daemon_ip_address_str,
             "--cql_proxy_bind_address=" + daemon_ip_address_str,
-            # "--local_ip_for_outbound_sockets=" + daemon_ip_address_str,
+            "--local_ip_for_outbound_sockets=" + daemon_ip_address_str,
             # TODO ENG-2876: Enable this in master as well.
             "--use_cassandra_authentication={}".format(
                 str(self.options.use_cassandra_authentication).lower())
@@ -1138,7 +1137,6 @@ class ClusterControl:
         if self.is_postgres_enabled():
             self.run_cluster_wide_postgres_initdb()
         self.status()
-        # print("Successfully created a new cluster.")
         if not DISABLE_CALLHOME_ENV_VAR_SET:
             print("Congratulations on installing YugaByte DB Community Edition. " +
                   "We'd like to welcome you to the community with a free t-shirt " +
