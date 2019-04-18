@@ -97,6 +97,19 @@ DEFAULT_REPLICATION_FACTOR = 1
 YB_POSTGRES_PORT = 5433
 
 
+def retry_fn_with_timeout(fn, timeout_sec=None):
+    if timeout_sec is None:
+        timeout_sec = MAX_WAIT_SECONDS
+    start_time = time.time()
+    wait_count = 0
+    while wait_count < MAX_WAIT_ITERS and (time.time() - start_time <= timeout_sec):
+        if fn():
+            return True
+        wait_count += 1
+        time.sleep(SLEEP_TIME_IN_SEC)
+    return False
+
+
 def is_env_var_true(env_var_name):
     env_var_value = os.getenv(env_var_name)
     return env_var_value and env_var_value.strip().lower() not in ['n', 'no', '0', 'f', 'false']
@@ -400,6 +413,7 @@ class ClusterOptions:
         self.max_daemon_index = 20
         self.num_shards_per_tserver = None
         self.replication_factor = DEFAULT_REPLICATION_FACTOR
+        self.timeout = None
 
         self.cluster_base_dir = None
 
@@ -477,6 +491,7 @@ class ClusterOptions:
         self.custom_binary_dir = args.binary_dir
         self.cluster_base_dir = args.data_dir
         self.num_shards_per_tserver = args.num_shards_per_tserver
+        self.timeout = args.timeout
 
         if hasattr(args, "v"):
             self.verbose_level = args.v
@@ -669,6 +684,9 @@ class ClusterControl:
         self.parser.add_argument(
             "--num_shards_per_tserver", default=2, type=int,
             help="Number of shards (tablets) to start per tablet server for each table.")
+        self.parser.add_argument(
+            "--timeout", default=MAX_WAIT_SECONDS, type=float,
+            help="Timeout in seconds for operations that wait on the cluster")
 
         self.parser.add_argument(
             "--install-if-needed",
@@ -1006,21 +1024,22 @@ class ClusterControl:
         cmd = [yb_admin_binary_path, "--master_addresses", self.options.master_addresses,
                "change_master_config", cmd_type, daemon_id.get_ip_address(),
                str(self.options.base_ports[DAEMON_TYPE_MASTER]["rpc"])]
-        wait_count = 0
-        while wait_count < MAX_WAIT_ITERS:
+
+        def call_change_config():
             try:
                 with open(os.devnull, "wb") as devnull:
                     subprocess.check_output(cmd, stderr=devnull)
-                return
+                return True
             except subprocess.CalledProcessError:
-                wait_count += 1
-                time.sleep(SLEEP_TIME_IN_SEC)
+                pass
+
+        if not retry_fn_with_timeout(call_change_config, self.options.timeout):
+            raise ExitWithError("Could not change master config...")
 
     def wait_for_cluster(self):
         # Wait for master leader to be ready, and wait for enough tservers.
-        # 'Enough' here means that the number of live tservers
-        # should be equal to the replication factor.
-        wait_count = 0
+        # 'Enough' here means that the number of live tservers reported to the master should be
+        # equal to the number of TS we have started -- based on directories we have on the FS.
         yb_admin_binary_path = self.options.get_binary_path("yb-admin")
         cmd_list_tservers = [yb_admin_binary_path,
                              "--master_addresses",
@@ -1030,9 +1049,8 @@ class ClusterControl:
         max_num_tservers = self.get_number_of_servers(DAEMON_TYPE_TSERVER)
         num_alive_ts = None
         num_yb_admin_ts = None
-        start_time = time.time()
-        logging.info("Waiting for master leader election tablet server registration.")
-        while wait_count < MAX_WAIT_ITERS and (time.time() - start_time <= MAX_WAIT_SECONDS):
+
+        def call_check_for_ts():
             try:
                 num_alive_ts = sum([self.get_pid(DaemonId(DAEMON_TYPE_TSERVER, i)) is not None
                                     for i in range(1, max_num_tservers + 1)])
@@ -1051,20 +1069,26 @@ class ClusterControl:
                     raise subprocess.CalledProcessError(proc.returncode,
                                                         cmd_list_tservers, output=output)
                 num_yb_admin_ts = len(output.splitlines()) - 1
-                # This will not work if you have stopped/removed a node and the master is still
-                # aware of it because we do not have a yb-admin API to return only live tablet
-                # servers.
                 if num_yb_admin_ts == num_alive_ts:
+                    # This will not work if you have stopped/removed a node and the master is still
+                    # aware of it because we do not have a yb-admin API to return only live tablet
+                    # servers.
                     return True
-                logging.info("Waiting for all tablet servers to register: {}/{}".format(
-                    num_yb_admin_ts, num_alive_ts))
+                elif num_yb_admin_ts < 0:
+                    # We might get no output from yb-admin if the leader is not up yet...
+                    logging.info("Master leader election still pending...")
+                else:
+                    logging.info("Waiting for all tablet servers to register: {}/{}".format(
+                        num_yb_admin_ts, num_alive_ts))
             except subprocess.CalledProcessError:
                 pass
-            wait_count += 1
-            time.sleep(SLEEP_TIME_IN_SEC)
-        logging.error("Failed waiting for {} tservers, got {}".format(
-            num_alive_ts, num_yb_admin_ts))
-        return False
+
+        logging.info("Waiting for master leader election tablet server registration.")
+        if not retry_fn_with_timeout(call_check_for_ts, self.options.timeout):
+            logging.error("Failed waiting for {} tservers, got {}".format(
+                num_alive_ts, num_yb_admin_ts))
+            return False
+        return True
 
     def wait_for_cluster_or_raise(self):
         if not self.wait_for_cluster():
@@ -1100,7 +1124,8 @@ class ClusterControl:
             ("Replication Factor", self.get_replication_factor()),
             # TODO: this might cause issues if the first master is down...
             ("Web UI", "http://{}/".format(
-                self.options.get_address(DaemonId(DAEMON_TYPE_TSERVER, 1), "http", True)))
+                self.options.get_address(DaemonId(DAEMON_TYPE_MASTER, 1), "http", True))),
+            ("Cluster Data", self.options.cluster_base_dir)
         ]
         self._print_status_box(title, info_kv_list)
 
@@ -1130,7 +1155,7 @@ class ClusterControl:
             # TODO: should probably not even display this if we can know it's not there...
             yedis_port = self.options.base_ports[tserver_daemon_id.daemon_type]["yedis_rpc"]
             info_kv_list.append(
-                ("YEDIS", "./bin.redis-cli -h {} -p {}".format(
+                ("YEDIS", "./bin/redis-cli -h {} -p {}".format(
                     tserver_daemon_id.get_ip_address(), yedis_port)))
 
         log_kv_list = []
@@ -1287,6 +1312,9 @@ class ClusterControl:
         self.wait_for_cluster_or_raise()
 
     def status(self):
+        if not os.path.isdir(self.options.cluster_base_dir):
+            print("No cluster data found at: '{}'".format(self.options.cluster_base_dir))
+            return
         self._cluster_status()
         server_counts = self.get_number_of_servers_map()
         max_nodes = max(
@@ -1370,6 +1398,7 @@ class ClusterControl:
 
 
 if __name__ == "__main__":
+    # TODO: can we put this inside the data_dir? how/when can we dodge the catch-22?
     logging.basicConfig(
             filename=SCRIPT_DEBUG_FILE,
             level=logging.INFO,
