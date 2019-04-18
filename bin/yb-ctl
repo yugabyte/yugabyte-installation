@@ -61,24 +61,23 @@ Restart node
 
 """
 
+import atexit
 import argparse
 import errno
 import glob
+import hashlib
+import json
 import logging
+import os
+import random
+import re
+import shutil
 import signal
 import subprocess
 import sys
 import time
-import os
-import shutil
-import random
-import json
-import hashlib
+import tempfile
 import urllib
-import subprocess
-import re
-
-SCRIPT_DEBUG_FILE = "startup.log"
 
 DAEMON_TYPE_MASTER = 'master'
 DAEMON_TYPE_TSERVER = 'tserver'
@@ -606,6 +605,7 @@ class ClusterControl:
         self.creating_cluster = False
 
         self._setup_parsing()
+        self.log_file = None
 
     def setup_base_parser(self, command, help=None):
         subparser = self.subparsers.add_parser(command, help=help)
@@ -687,6 +687,9 @@ class ClusterControl:
         self.parser.add_argument(
             "--timeout", default=MAX_WAIT_SECONDS, type=float,
             help="Timeout in seconds for operations that wait on the cluster")
+        self.parser.add_argument(
+            "--verbose", action="store_true",
+            help="If specified, will log internal debug messages to stderr.")
 
         self.parser.add_argument(
             "--install-if-needed",
@@ -1385,6 +1388,16 @@ class ClusterControl:
 
     def run(self):
         self.args = self.parser.parse_args()
+        if not self.args.verbose:
+            fd, filename = tempfile.mkstemp(text=True)
+            os.close(fd)
+            self.log_file = filename
+            atexit.register(lambda: self.cleanup(keep_log_file_and_dump_to_stderr=True))
+
+        logging.basicConfig(
+                filename=self.log_file,
+                level=logging.INFO,
+                format="%(asctime)s %(levelname)s: %(message)s")
 
         # Load cluster configuration for the non-creation case -- however, we will override
         # this configuration if the command is "create".
@@ -1396,18 +1409,27 @@ class ClusterControl:
 
         self.args.func()
 
+    def cleanup(self, keep_log_file_and_dump_to_stderr=False):
+        # Never created a temp log file to begin with.
+        if not self.log_file:
+            return
+        # If we have a file, we either failed and should keep the file, or wrapped up successfully,
+        # case in which we should remove the file.
+        if os.path.isfile(self.log_file):
+            # If we called the atexit handler and we have a file, it means we must have had errors.
+            if keep_log_file_and_dump_to_stderr:
+                with open(self.log_file, "rb") as log:
+                    shutil.copyfileobj(log, sys.stdout)
+                print("^^^ Encountered errors ^^^")
+            # Whichever cleanup comes first should remove the file.
+            os.remove(self.log_file)
+
 
 if __name__ == "__main__":
-    # TODO: can we put this inside the data_dir? how/when can we dodge the catch-22?
-    logging.basicConfig(
-            filename=SCRIPT_DEBUG_FILE,
-            level=logging.INFO,
-            format="%(asctime)s %(levelname)s: %(message)s")
-    print("Logging debug information to: {}".format(
-        os.path.join(os.getcwd(), SCRIPT_DEBUG_FILE)))
-
     try:
-        ClusterControl().run()
+        control = ClusterControl()
+        control.run()
+        control.cleanup()
     except ExitWithError, ex:
         logging.error(ex)
         sys.exit(1)
