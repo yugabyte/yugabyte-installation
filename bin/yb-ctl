@@ -87,7 +87,6 @@ DAEMON_TYPES = [
     DAEMON_TYPE_TSERVER
 ]
 
-MAX_WAIT_ITERS = 20
 SLEEP_TIME_IN_SEC = 1
 MAX_WAIT_SECONDS = 45
 DEPRECATED_DEFAULT_NUM_DRIVES = 2
@@ -96,17 +95,13 @@ DEFAULT_REPLICATION_FACTOR = 1
 YB_POSTGRES_PORT = 5433
 
 
-def retry_fn_with_timeout(fn, timeout_sec=None):
-    if timeout_sec is None:
-        timeout_sec = MAX_WAIT_SECONDS
+def retry_fn_with_timeout(fn, timeout_sec=MAX_WAIT_SECONDS):
     start_time = time.time()
-    wait_count = 0
-    while wait_count < MAX_WAIT_ITERS and (time.time() - start_time <= timeout_sec):
-        if fn():
-            return True
-        wait_count += 1
+    while time.time() - start_time <= timeout_sec:
+        ret = fn()
+        if ret:
+            return ret
         time.sleep(SLEEP_TIME_IN_SEC)
-    return False
 
 
 def is_env_var_true(env_var_name):
@@ -421,8 +416,8 @@ class ClusterOptions:
 
         self.installation_dir = None
         yb_src_root_candidate = os.path.dirname(os.path.dirname(os.path.dirname(self.script_dir)))
-        # For internal development, assume $PARENT_DIR/yugabyte-installation/bin/yb-ctl will have
-        # sibling directories $PARENT_DIR/yugabyte or $PARENT_DIR/yugabyte-db.
+        # For development, assume $PARENT_DIR/yugabyte-installation/bin/yb-ctl will have sibling
+        # directories $PARENT_DIR/yugabyte or $PARENT_DIR/yugabyte-db.
         installation_parent_dir = os.path.dirname(os.path.dirname(self.script_dir))
 
         # "YB_USE_EXTERNAL_BUILD_ROOT" is a special way to place the build directory. This is only
@@ -770,20 +765,22 @@ class ClusterControl:
 
         This assumes you will have called set_master_addresses already!
         """
-        if len(self.options.placement_info) > 0:
-            yb_admin_binary_path = self.options.get_binary_path("yb-admin")
-            cmd = [yb_admin_binary_path, "--master_addresses", self.options.master_addresses,
-                   "modify_placement_info", self.options.placement_info_raw,
-                   str(self.get_replication_factor())]
-            wait_count = 0
-            while wait_count < MAX_WAIT_ITERS:
-                try:
-                    subprocess.check_call(cmd)
-                    print("Successfully modified placement info.")
-                    return
-                except subprocess.CalledProcessError:
-                    wait_count += 1
-                    time.sleep(SLEEP_TIME_IN_SEC)
+        if not self.options.placement_info:
+            return
+
+        yb_admin_binary_path = self.options.get_binary_path("yb-admin")
+        cmd = [yb_admin_binary_path, "--master_addresses", self.options.master_addresses,
+               "modify_placement_info", self.options.placement_info_raw,
+               str(self.get_replication_factor())]
+        def call_modify_placement_info():
+            try:
+                with open(os.devnull, "wb") as devnull:
+                    subprocess.check_call(cmd, stderr=devnull)
+                logging.info("Successfully modified placement info.")
+                return True
+            except subprocess.CalledProcessError:
+                pass
+        if not retry_fn_with_timeout(call_modify_placement_info, self.options.timeout):
             raise RuntimeError("Could not modify placement info for the cluster.")
 
     def get_number_of_servers(self, daemon_type):
