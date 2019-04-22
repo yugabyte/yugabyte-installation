@@ -772,6 +772,7 @@ class ClusterControl:
         cmd = [yb_admin_binary_path, "--master_addresses", self.options.master_addresses,
                "modify_placement_info", self.options.placement_info_raw,
                str(self.get_replication_factor())]
+
         def call_modify_placement_info():
             try:
                 with open(os.devnull, "wb") as devnull:
