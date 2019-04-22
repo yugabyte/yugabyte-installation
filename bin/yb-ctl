@@ -599,7 +599,7 @@ class ClusterControl:
         # This is true only for the "create" command.
         self.creating_cluster = False
 
-        self._setup_parsing()
+        self.setup_parsing()
         self.log_file = None
 
     def setup_base_parser(self, command, help=None):
@@ -663,7 +663,7 @@ class ClusterControl:
             help="Specify extra tserver flags as a set of key value pairs. "
                  "Format (key=value,key=value)")
 
-    def _setup_parsing(self):
+    def setup_parsing(self):
         """
         Sets up the command-line parser. Called from the constructor.
         """
@@ -1094,15 +1094,7 @@ class ClusterControl:
         if not self.wait_for_cluster():
             raise RuntimeError("Timed out waiting for Yugabyte cluster!")
 
-    def _print_status_box(self, title, body_kv_list):
-        print("-" * 100)
-        print("| {:<96} |".format(title))
-        print("-" * 100)
-        for k, v in body_kv_list:
-            print("| {:20}: {:<74} |".format(k, v))
-        print("-" * 100)
-
-    def _cluster_status(self):
+    def query_cluster_uuid(self):
         cluster_uuid = None
         try:
             with open(os.devnull, "wb") as devnull:
@@ -1115,19 +1107,62 @@ class ClusterControl:
             cluster_uuid = regex_groups[0] if regex_groups else None
         except subprocess.CalledProcessError as e:
             pass
+        return cluster_uuid
 
-        title = "Cluster UUID: {}".format(cluster_uuid)
+    def print_status_box(self, title, body_kv_list):
+        print("-" * 100)
+        print("| {:<96} |".format(title))
+        print("-" * 100)
+        for k, v in body_kv_list:
+            print("| {:20}: {:<74} |".format(k, v))
+        print("-" * 100)
+
+    def cluster_status(self, more_info=True):
+        # cluster_uuid = self.query_cluster_uuid()
+        # title = "Cluster UUID: {}".format(cluster_uuid)
         server_counts = self.get_number_of_servers_map()
-        info_kv_list = [
-            ("Master Count", server_counts.get(DAEMON_TYPE_MASTER)),
-            ("TServer Count", server_counts.get(DAEMON_TYPE_TSERVER)),
-            ("Replication Factor", self.get_replication_factor()),
+        num_servers = max(
+            server_counts.get(DAEMON_TYPE_MASTER), server_counts.get(DAEMON_TYPE_TSERVER))
+        title = "Number of servers: {} | Replication factor: {}".format(
+            num_servers, self.get_replication_factor())
+        info_kv_list = self.gen_status_tserver_connectivity(DaemonId(DAEMON_TYPE_TSERVER, 1))
+        info_kv_list.extend([
             # TODO: this might cause issues if the first master is down...
             ("Web UI", "http://{}/".format(
                 self.options.get_address(DaemonId(DAEMON_TYPE_MASTER, 1), "http", True))),
             ("Cluster Data", self.options.cluster_base_dir)
-        ]
-        self._print_status_box(title, info_kv_list)
+        ])
+        self.print_status_box(title, info_kv_list)
+        if more_info:
+            status_cmd = "yb-ctl"
+            if self.options.cluster_base_dir != get_default_data_dir():
+                status_cmd += " --data_dir {}".format(self.options.cluster_base_dir)
+            status_cmd += " status"
+            print("")
+            print("For more info, please use: {}".format(status_cmd))
+
+    def gen_status_tserver_connectivity(self, tserver_daemon_id):
+        info_kv_list = []
+        if not tserver_daemon_id:
+            return info_kv_list
+        if self.is_postgres_enabled():
+            ysql_port = self.options.base_ports[tserver_daemon_id.daemon_type]["ysql_rpc"]
+            info_kv_list.extend([
+                ("JDBC", "postgresql://postgres@{}:{}".format(
+                    tserver_daemon_id.get_ip_address(), ysql_port)),
+                ("YSQL", "./bin/psql -U postgres -h {} -p {}".format(
+                    tserver_daemon_id.get_ip_address(), ysql_port))
+            ])
+        ycql_port = self.options.base_ports[tserver_daemon_id.daemon_type]["ycql_rpc"]
+        info_kv_list.append(
+            ("YCQL", "./bin/cqlsh {} {}".format(
+                tserver_daemon_id.get_ip_address(), ycql_port)))
+        # TODO: should probably not even display this if we can know it's not there...
+        yedis_port = self.options.base_ports[tserver_daemon_id.daemon_type]["yedis_rpc"]
+        info_kv_list.append(
+            ("YEDIS", "./bin/redis-cli -h {} -p {}".format(
+                tserver_daemon_id.get_ip_address(), yedis_port)))
+        return info_kv_list
 
     def show_node_status(self, daemon_index, server_counts=None):
         if server_counts is None:
@@ -1136,28 +1171,8 @@ class ClusterControl:
         is_tserver = daemon_index <= server_counts.get(DAEMON_TYPE_TSERVER)
         tserver_daemon_id = DaemonId(DAEMON_TYPE_TSERVER, daemon_index) if is_tserver else None
         master_daemon_id = DaemonId(DAEMON_TYPE_MASTER, daemon_index) if is_master else None
-        # pid = self.get_pid(tserver_daemon_id)
 
-        info_kv_list = []
-        if is_tserver:
-            if self.is_postgres_enabled():
-                ysql_port = self.options.base_ports[tserver_daemon_id.daemon_type]["ysql_rpc"]
-                info_kv_list.extend([
-                    ("JDBC", "postgresql://postgres@{}:{}".format(
-                        tserver_daemon_id.get_ip_address(), ysql_port)),
-                    ("YSQL", "./bin/psql -U postgres -h {} -p {}".format(
-                        tserver_daemon_id.get_ip_address(), ysql_port))
-                ])
-            ycql_port = self.options.base_ports[tserver_daemon_id.daemon_type]["ycql_rpc"]
-            info_kv_list.append(
-                ("YCQL", "./bin/cqlsh {} {}".format(
-                    tserver_daemon_id.get_ip_address(), ycql_port)))
-            # TODO: should probably not even display this if we can know it's not there...
-            yedis_port = self.options.base_ports[tserver_daemon_id.daemon_type]["yedis_rpc"]
-            info_kv_list.append(
-                ("YEDIS", "./bin/redis-cli -h {} -p {}".format(
-                    tserver_daemon_id.get_ip_address(), yedis_port)))
-
+        info_kv_list = self.gen_status_tserver_connectivity(tserver_daemon_id)
         log_kv_list = []
         for idx, node_dir in enumerate(self.get_base_node_dirs(daemon_index)):
             data_path = os.path.join(node_dir, "yb-data")
@@ -1182,7 +1197,7 @@ class ClusterControl:
             process_list.append("yb-{} ({})".format(DAEMON_TYPE_MASTER, pid if pid else "Stopped"))
 
         title = "Node {}: {}".format(daemon_index, ", ".join(process_list))
-        self._print_status_box(title, info_kv_list)
+        self.print_status_box(title, info_kv_list)
 
     def for_all_daemons(self, fn, server_counts_map=None):
         """
@@ -1222,7 +1237,7 @@ class ClusterControl:
 
         if self.is_postgres_enabled():
             self.run_cluster_wide_postgres_initdb()
-        self._cluster_status()
+        self.cluster_status()
         if not DISABLE_CALLHOME_ENV_VAR_SET:
             print("Congratulations on installing YugaByte DB Community Edition. " +
                   "We'd like to welcome you to the community with a free t-shirt " +
@@ -1237,7 +1252,7 @@ class ClusterControl:
             self.for_all_daemons(self.start_daemon)
             self.wait_for_cluster_or_raise()
             self.modify_placement_info()
-            self._cluster_status()
+            self.cluster_status()
         else:
             self.create()
 
@@ -1260,7 +1275,7 @@ class ClusterControl:
         self.for_all_daemons(self.start_daemon)
         self.wait_for_cluster_or_raise()
         self.modify_placement_info()
-        self._cluster_status()
+        self.cluster_status()
 
     def wipe_restart(self):
         num_servers_map = self.get_number_of_servers_map()
@@ -1269,7 +1284,7 @@ class ClusterControl:
         self.start_helper(num_servers_map)
         self.wait_for_cluster_or_raise()
         self.modify_placement_info()
-        self._cluster_status()
+        self.cluster_status()
 
     def add_node(self):
         self.set_master_addresses(running_only=True)
@@ -1315,7 +1330,7 @@ class ClusterControl:
         if not os.path.isdir(self.options.cluster_base_dir):
             print("No cluster data found at: '{}'".format(self.options.cluster_base_dir))
             return
-        self._cluster_status()
+        self.cluster_status(more_info=False)
         server_counts = self.get_number_of_servers_map()
         max_nodes = max(
             server_counts.get(DAEMON_TYPE_MASTER), server_counts.get(DAEMON_TYPE_TSERVER))
@@ -1419,6 +1434,7 @@ class ClusterControl:
                     shutil.copyfileobj(log, sys.stdout)
                 print("^^^ Encountered errors ^^^")
             # Whichever cleanup comes first should remove the file.
+            # TODO: Maybe keep the log file around and allow the user to upload a gist with the log.
             os.remove(self.log_file)
 
 
