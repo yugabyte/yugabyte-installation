@@ -818,6 +818,7 @@ class ClusterControl:
         try:
             pid = subprocess.check_output(
                 ["pgrep", "-f", self.get_pgrep_regex(daemon_id)]).strip().split()[0]
+            return int(pid)
         except subprocess.CalledProcessError as e:
             # From man pgrep
             #
