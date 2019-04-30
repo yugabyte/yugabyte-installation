@@ -9,8 +9,21 @@ log() {
   echo >&2 "[$( date +%Y-%m-%dT%H:%M:%S] ) $*"
 }
 
+start_cluster_run_tests() {
+  root_dir=$1
+  "$root_dir"/yb-ctl $flag_data_dir start
+  "$root_dir"/yb-ctl $flag_data_dir add_node
+  "$root_dir"/yb-ctl $flag_data_dir stop_node 1
+  "$root_dir"/yb-ctl $flag_data_dir start_node 1
+  "$root_dir"/yb-ctl $flag_data_dir stop
+}
+
 yb_data_dirs=(
-  "$HOME/yugabyte-data"
+  "/tmp/yugabyte-data"
+)
+
+flag_data_dir=(
+  "--data_dir ${yb_data_dirs[0]}"
 )
 
 log_heading() {
@@ -59,10 +72,9 @@ fi
 
 trap cleanup EXIT
 
-bin/yb-ctl --install-if-needed create
-bin/yb-ctl stop
-bin/yb-ctl start
-bin/yb-ctl stop
+bin/yb-ctl $flag_data_dir --install-if-needed create
+bin/yb-ctl $flag_data_dir stop
+start_cluster_run_tests "bin"
 
 log "Testing putting this version of yb-ctl inside the installation directory"
 installation_dir=$( ls -td "$HOME/yugabyte-db/yugabyte-"* | head -1 )
@@ -70,8 +82,7 @@ log "YugaByte DB was automatically installed into directory: $installation_dir"
 (
   set -x
   cp bin/yb-ctl "$installation_dir"
-  "$installation_dir/yb-ctl" start
-  "$installation_dir/yb-ctl" stop
+  start_cluster_run_tests "$installation_dir"
 )
 
 log "Pretending we've just built the code and are running yb-ctl from the bin directory in the code"
