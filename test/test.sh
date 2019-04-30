@@ -11,11 +11,11 @@ log() {
 
 start_cluster_run_tests() {
   root_dir=$1
-  $root_dir/yb-ctl $flag_data_dir start
-  $root_dir/yb-ctl $flag_data_dir add_node
-  $root_dir/yb-ctl $flag_data_dir stop_node 1
-  $root_dir/yb-ctl $flag_data_dir start_node 1
-  $root_dir/yb-ctl $flag_data_dir stop
+  "$root_dir"/yb-ctl $flag_data_dir start
+  "$root_dir"/yb-ctl $flag_data_dir add_node
+  "$root_dir"/yb-ctl $flag_data_dir stop_node 1
+  "$root_dir"/yb-ctl $flag_data_dir start_node 1
+  "$root_dir"/yb-ctl $flag_data_dir stop
 }
 
 yb_data_dirs=(
