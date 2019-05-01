@@ -264,11 +264,11 @@ def is_yugabyte_db_installation_dir(top_dir):
 
 
 class Installer:
-    YUGABYTE_DB_VERSION = '1.2.2.0'
+    YUGABYTE_DB_VERSION = '1.2.6.0'
     DOWNLOAD_URL_PATTERN = 'https://downloads.yugabyte.com/yugabyte-ce-{version}-{os}.tar.gz'
     SHA256_SUM_BY_OS = {
-        'darwin': 'dbed190bd49fab14aca2c0e4b8948e4d15a6dcb193d210ba90f5e1317345ea7e',
-        'linux': '8469d847b87dcea2a4a13faab0bdba1bf73b683393530a2e8571cdd06cc71883'
+        'darwin': 'dde32b6fae227f4d9743c346e02903c3b3b19f36dd335cfd39348200ad465adb',
+        'linux': '0025e8630ff0d44d3b7e780c40595f64acc558ad3901bfe8fd31af88ab696f94'
     }
 
     def __init__(self, only_find_existing=False):
