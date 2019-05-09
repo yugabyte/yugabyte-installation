@@ -61,6 +61,8 @@ Restart node
 
 """
 
+from __future__ import print_function
+
 import atexit
 import argparse
 import errno
@@ -78,6 +80,7 @@ import sys
 import time
 import tempfile
 import urllib
+
 
 DAEMON_TYPE_MASTER = 'master'
 DAEMON_TYPE_TSERVER = 'tserver'
@@ -138,6 +141,16 @@ def retry_call_with_timeout(fn, timeout_sec=MAX_WAIT_SECONDS):
                 logging.error("Failed too many times. CMDLINE={} RETCODE={} OUTPUT={}".format(
                     e.cmd, e.returncode, e.output))
         time.sleep(SLEEP_TIME_IN_SEC)
+
+
+def wait_for_proc_report_progress(proc):
+    while proc.poll() is None:
+        # Do not add newline at the end, just report one . per second.
+        print(".", end="")
+        sys.stdout.flush()
+        time.sleep(1)
+    # Add a newline, since we did not do so during above printing of dots.
+    print()
 
 
 def is_env_var_true(env_var_name):
@@ -1037,6 +1050,7 @@ class ClusterControl:
         self.start_daemon(daemon_id)
 
     def start_helper(self, server_counts_map):
+        print("Starting cluster")
         if len(self.options.placement_info) > self.get_replication_factor():
             raise RuntimeError("Number of placement info fields is larger than "
                                "the replication factor and hence the number of servers.")
@@ -1134,6 +1148,7 @@ class ClusterControl:
         return True
 
     def wait_for_cluster_or_raise(self):
+        print("Waiting for cluster to be ready.")
         if not self.wait_for_cluster():
             raise RuntimeError("Timed out waiting for Yugabyte cluster!")
 
@@ -1265,11 +1280,6 @@ class ClusterControl:
         if self.is_ysql_enabled():
             self.run_cluster_wide_ysql_initdb()
         self.cluster_status()
-        if not DISABLE_CALLHOME_ENV_VAR_SET:
-            print("Congratulations on installing YugaByte DB Community Edition. " +
-                  "We'd like to welcome you to the community with a free t-shirt " +
-                  "and pack of stickers! " +
-                  "Please claim your reward here: https://www.yugabyte.com/community-rewards/")
 
     # Starts as well as creates. Check if the cluster exists.
     # If it does not create it else start the individual daemons.
@@ -1383,6 +1393,7 @@ class ClusterControl:
         print("Setup Redis successful.")
 
     def run_cluster_wide_ysql_initdb(self):
+        print("Initializing cluster")
         initdb_binary_path = self.options.get_binary_path("initdb")
 
         logging.info("Running initdb to initialize YSQL metadata in the YugaByte cluster. "
@@ -1401,12 +1412,13 @@ class ClusterControl:
             succeeded = False
             try:
                 with open(initdb_log_path, 'w') as initdb_stdout_file:
-                    subprocess.check_call([
+                    proc = subprocess.Popen([
                         initdb_binary_path,
                         '-D', tmp_pg_data_dir,
                         '-U', 'postgres'
                     ], stdout=initdb_stdout_file, stderr=subprocess.STDOUT)
-                succeeded = True
+                    wait_for_proc_report_progress(proc)
+                    succeeded = proc.returncode == 0
             finally:
                 if os.path.exists(tmp_pg_data_dir):
                     logging.info("Deleting temporary YSQL data directory: %s",
