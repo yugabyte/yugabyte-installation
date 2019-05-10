@@ -61,6 +61,8 @@ Restart node
 
 """
 
+from __future__ import print_function
+
 import atexit
 import argparse
 import errno
@@ -78,6 +80,7 @@ import sys
 import time
 import tempfile
 import urllib
+
 
 DAEMON_TYPE_MASTER = 'master'
 DAEMON_TYPE_TSERVER = 'tserver'
@@ -138,6 +141,16 @@ def retry_call_with_timeout(fn, timeout_sec=MAX_WAIT_SECONDS):
                 logging.error("Failed too many times. CMDLINE={} RETCODE={} OUTPUT={}".format(
                     e.cmd, e.returncode, e.output))
         time.sleep(SLEEP_TIME_IN_SEC)
+
+
+def wait_for_proc_report_progress(proc):
+    while proc.poll() is None:
+        # Do not add newline at the end, just report one . per second.
+        print(".", end="")
+        sys.stdout.flush()
+        time.sleep(1)
+    # Add a newline, since we did not do so during above printing of dots.
+    print()
 
 
 def is_env_var_true(env_var_name):
@@ -736,18 +749,18 @@ class ClusterControl:
         for cmd_name, help in (
                 ("create", "Create a new cluster"),
                 ("start", "Create a new cluster, or start existing cluster if it already exists."),
-                ("stop", "Stops the cluster"),
-                ("destroy", "Destroy the current cluster"),
-                ("restart", "Restart the current cluster all at once"),
-                ("wipe_restart", "Stop the cluster, wipe all data files and start the cluster as"
+                ("stop", "Stop the cluster"),
+                ("destroy", "Destroy the cluster"),
+                ("restart", "Restart the cluster"),
+                ("wipe_restart", "Stop the cluster, wipe all data files and start the cluster as "
                                  "before. Will lose all the flags though."),
-                ("add_node", "Add a new node to the current cluster"),
-                ("remove_node", "Stop a particular node in the cluster."),
-                ("start_node", "Start a particular node with flags."),
+                ("add_node", "Add a new node to the cluster"),
+                ("remove_node", "Stop the specified node in the cluster"),
+                ("start_node", "Start the specified node in the cluster"),
                 # Adding this to keep the start_node/stop_node nomenclature symmetric.
-                ("stop_node", "Stop a particular node in the cluster"),
-                ("restart_node", "Restart the node specified."),
-                ("status", "Get info on the current cluster processes"),
+                ("stop_node", "Stop the specified node in the cluster"),
+                ("restart_node", "Restart the specified node in the cluster"),
+                ("status", "Get cluster information"),
                 ("setup_redis", "Setup YugaByte to support Redis API")):
 
             subparsers[cmd_name] = self.setup_base_parser(cmd_name, help=help)
@@ -1134,6 +1147,7 @@ class ClusterControl:
         return True
 
     def wait_for_cluster_or_raise(self):
+        print("Waiting for cluster to be ready.")
         if not self.wait_for_cluster():
             raise RuntimeError("Timed out waiting for Yugabyte cluster!")
 
@@ -1149,7 +1163,7 @@ class ClusterControl:
         server_counts = self.get_number_of_servers_map()
         num_servers = max(
             server_counts.get(DAEMON_TYPE_MASTER), server_counts.get(DAEMON_TYPE_TSERVER))
-        title = "Number of servers: {} | Replication factor: {}".format(
+        title = "Node Count: {} | Replication Factor: {}".format(
             num_servers, self.get_replication_factor())
         info_kv_list = self.gen_status_tserver_connectivity(DaemonId(DAEMON_TYPE_TSERVER, 1))
         info_kv_list.extend([
@@ -1177,17 +1191,14 @@ class ClusterControl:
             info_kv_list.extend([
                 ("JDBC", "postgresql://postgres@{}:{}".format(
                     tserver_daemon_id.get_ip_address(), ysql_port)),
-                ("YSQL", "./bin/psql -U postgres -h {} -p {}".format(
-                    tserver_daemon_id.get_ip_address(), ysql_port))
+                ("YSQL Shell", "./bin/ysqlsh")
             ])
-        ycql_port = self.options.base_ports[tserver_daemon_id.daemon_type]["ycql_rpc"]
         info_kv_list.append(
-            ("YCQL", "./bin/cqlsh {} {}".format(
-                tserver_daemon_id.get_ip_address(), ycql_port)))
+            ("YCQL Shell", "./bin/cqlsh"))
         # TODO: should probably not even display this if we can know it's not there...
         yedis_port = self.options.base_ports[tserver_daemon_id.daemon_type]["yedis_rpc"]
         info_kv_list.append(
-            ("YEDIS", "./bin/redis-cli -h {} -p {}".format(
+            ("YEDIS Shell", "./bin/redis-cli -h {} -p {}".format(
                 tserver_daemon_id.get_ip_address(), yedis_port)))
         return info_kv_list
 
@@ -1206,10 +1217,10 @@ class ClusterControl:
             if idx == 0:
                 if is_tserver:
                     log_kv_list.append(
-                        ("TServer Logs", os.path.join(data_path, DAEMON_TYPE_TSERVER, "logs")))
+                        ("yb-tserver Logs", os.path.join(data_path, DAEMON_TYPE_TSERVER, "logs")))
                 if is_master:
                     log_kv_list.append(
-                        ("Master Logs", os.path.join(data_path, DAEMON_TYPE_MASTER, "logs")))
+                        ("yb-master Logs", os.path.join(data_path, DAEMON_TYPE_MASTER, "logs")))
             info_kv_list.append(
                 ("data-dir[{}]".format(idx), data_path))
         info_kv_list.extend(log_kv_list)
@@ -1218,10 +1229,12 @@ class ClusterControl:
         process_list = []
         if is_tserver:
             pid = self.get_pid(tserver_daemon_id)
-            process_list.append("yb-{} ({})".format(DAEMON_TYPE_TSERVER, pid if pid else "Stopped"))
+            process = "pid {}".format(pid) if pid else "Stopped"
+            process_list.append("yb-{} ({})".format(DAEMON_TYPE_TSERVER, process))
         if is_master:
             pid = self.get_pid(master_daemon_id)
-            process_list.append("yb-{} ({})".format(DAEMON_TYPE_MASTER, pid if pid else "Stopped"))
+            process = "pid {}".format(pid) if pid else "Stopped"
+            process_list.append("yb-{} ({})".format(DAEMON_TYPE_MASTER, process))
 
         title = "Node {}: {}".format(daemon_index, ", ".join(process_list))
         self.print_status_box(title, info_kv_list)
@@ -1240,6 +1253,7 @@ class ClusterControl:
                 fn(DaemonId(daemon_type, daemon_index))
 
     def create(self):
+        print("Creating cluster.")
         self.creating_cluster = True
         server_counts = self.options.replication_factor
         self.set_master_addresses()
@@ -1265,16 +1279,12 @@ class ClusterControl:
         if self.is_ysql_enabled():
             self.run_cluster_wide_ysql_initdb()
         self.cluster_status()
-        if not DISABLE_CALLHOME_ENV_VAR_SET:
-            print("Congratulations on installing YugaByte DB Community Edition. " +
-                  "We'd like to welcome you to the community with a free t-shirt " +
-                  "and pack of stickers! " +
-                  "Please claim your reward here: https://www.yugabyte.com/community-rewards/")
 
     # Starts as well as creates. Check if the cluster exists.
     # If it does not create it else start the individual daemons.
     def start(self):
         if os.path.isdir(self.options.cluster_base_dir):
+            print("Starting cluster.")
             self.set_master_addresses()
             self.for_all_daemons(self.start_daemon)
             self.wait_for_cluster_or_raise()
@@ -1285,9 +1295,11 @@ class ClusterControl:
 
     # Stops the cluster.
     def stop(self):
+        print("Stopping cluster.")
         self.for_all_daemons(self.stop_daemon)
 
     def destroy(self):
+        print("Destroying cluster.")
         self.for_all_daemons(self.stop_daemon)
 
         # Remove the top-level directory.
@@ -1298,7 +1310,9 @@ class ClusterControl:
 
     def restart(self):
         self.set_master_addresses()
+        print("Stopping cluster.")
         self.for_all_daemons(self.stop_daemon)
+        print("Starting cluster.")
         self.for_all_daemons(self.start_daemon)
         self.wait_for_cluster_or_raise()
         self.modify_placement_info()
@@ -1308,12 +1322,14 @@ class ClusterControl:
         num_servers_map = self.get_number_of_servers_map()
         self.set_master_addresses()
         self.destroy()
+        print("Starting cluster.")
         self.start_helper(num_servers_map)
         self.wait_for_cluster_or_raise()
         self.modify_placement_info()
         self.cluster_status()
 
     def add_node(self):
+        print("Adding node.")
         self.set_master_addresses(running_only=True)
         num_servers = self.get_number_of_servers(self.options.node_type)
         if len(self.options.placement_info) > 1:
@@ -1327,6 +1343,7 @@ class ClusterControl:
         self.show_node_status(daemon_id.index)
 
     def remove_node(self):
+        print("Stopping node {}-{}.".format(self.options.node_type, self.args.node_id))
         # Note: remove_node in its current implementation just stops a node and does not
         # decommission it. To properly decommission a local "node", we'll need
         # to remove it from the master's metadata and also delete the data directory.
@@ -1335,6 +1352,7 @@ class ClusterControl:
         self.stop_daemon(daemon_id)
 
     def start_node(self):
+        print("Starting node {}-{}.".format(self.options.node_type, self.args.node_id))
         daemon_id = DaemonId(self.options.node_type, self.args.node_id)
         self.set_master_addresses()
         self.start_daemon(daemon_id)
@@ -1345,11 +1363,13 @@ class ClusterControl:
         self.remove_node()
 
     def restart_node(self):
+        print("Stopping node {}-{}.".format(self.options.node_type, self.args.node_id))
         daemon_id = DaemonId(self.options.node_type, self.args.node_id)
         self.stop_daemon(daemon_id)
         self.set_master_addresses()
         if len(self.options.placement_info) > 1:
             raise RuntimeError("Please specify exactly one placement_info value.")
+        print("Starting node {}-{}.".format(self.options.node_type, self.args.node_id))
         self.start_daemon(daemon_id)
         self.wait_for_cluster_or_raise()
 
@@ -1365,6 +1385,7 @@ class ClusterControl:
             self.show_node_status(index, server_counts)
 
     def setup_redis(self):
+        print("Setting up YugaByte support for Redis API.")
         yb_admin_binary_path = self.options.get_binary_path("yb-admin")
         self.set_master_addresses()
         self.wait_for_cluster_or_raise()
@@ -1383,6 +1404,7 @@ class ClusterControl:
         print("Setup Redis successful.")
 
     def run_cluster_wide_ysql_initdb(self):
+        print("Initializing cluster. This may take up to a minute.")
         initdb_binary_path = self.options.get_binary_path("initdb")
 
         logging.info("Running initdb to initialize YSQL metadata in the YugaByte cluster. "
@@ -1401,12 +1423,13 @@ class ClusterControl:
             succeeded = False
             try:
                 with open(initdb_log_path, 'w') as initdb_stdout_file:
-                    subprocess.check_call([
+                    proc = subprocess.Popen([
                         initdb_binary_path,
                         '-D', tmp_pg_data_dir,
                         '-U', 'postgres'
                     ], stdout=initdb_stdout_file, stderr=subprocess.STDOUT)
-                succeeded = True
+                    wait_for_proc_report_progress(proc)
+                    succeeded = proc.returncode == 0
             finally:
                 if os.path.exists(tmp_pg_data_dir):
                     logging.info("Deleting temporary YSQL data directory: %s",
