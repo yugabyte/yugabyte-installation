@@ -144,6 +144,11 @@ def retry_call_with_timeout(fn, timeout_sec=MAX_WAIT_SECONDS):
 
 
 def wait_for_proc_report_progress(proc):
+    """
+    Poll process to check if it has terminated and print one . per second.
+    This is used as a way to indicate to user that process is still running.
+    :param proc: the process whose status needs to be checked
+    """
     while proc.poll() is None:
         # Do not add newline at the end, just report one . per second.
         print(".", end="")
