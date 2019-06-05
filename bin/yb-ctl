@@ -94,6 +94,11 @@ SLEEP_TIME_IN_SEC = 1
 MAX_WAIT_SECONDS = 45
 DEFAULT_REPLICATION_FACTOR = 1
 
+# A regex to get data directories out a command line of a running process.
+# Needs to match e.g. the following command line snippet:
+# --fs_data_dirs /tmp/yb-ctl-test-data-2019-06-05T14_14_12-4841/node-1/disk-1
+FS_DATA_DIRS_ARG_RE = re.compile(r'--fs_data_dirs[ =](\S+)')
+
 
 def call_get_output_maybe_error(cmd_list, should_get_error=False):
     """
@@ -149,13 +154,19 @@ def wait_for_proc_report_progress(proc):
     This is used as a way to indicate to user that process is still running.
     :param proc: the process whose status needs to be checked
     """
+    PROGRESS_REPORTING_DELAY_SEC = 2
+    start_time_sec = time.time()
+    printed_dots = False
     while proc.poll() is None:
         # Do not add newline at the end, just report one . per second.
-        print(".", end="")
-        sys.stdout.flush()
+        if time.time() - start_time_sec > PROGRESS_REPORTING_DELAY_SEC:
+            print(".", end="")
+            sys.stdout.flush()
+            printed_dots = True
         time.sleep(1)
-    # Add a newline, since we did not do so during above printing of dots.
-    print()
+    if printed_dots:
+        # Add a newline, since we did not do so during above printing of dots.
+        print()
 
 
 def is_env_var_true(env_var_name):
@@ -282,11 +293,11 @@ def is_yugabyte_db_installation_dir(top_dir):
 
 
 class Installer:
-    YUGABYTE_DB_VERSION = '1.2.6.0'
+    YUGABYTE_DB_VERSION = '1.2.10.0'
     DOWNLOAD_URL_PATTERN = 'https://downloads.yugabyte.com/yugabyte-ce-{version}-{os}.tar.gz'
     SHA256_SUM_BY_OS = {
-        'darwin': 'dde32b6fae227f4d9743c346e02903c3b3b19f36dd335cfd39348200ad465adb',
-        'linux': '0025e8630ff0d44d3b7e780c40595f64acc558ad3901bfe8fd31af88ab696f94'
+        'darwin': 'ee5ba828b0b702016c4a6003cc4f3bda3eee0e0ffbb954dd409d55fde7687d97',
+        'linux': '34f0426f1d0b9d61a8cf72c3328c9d3a538f5c8267669c0e02b780b124b9e75b'
     }
 
     def __init__(self, only_find_existing=False):
@@ -527,7 +538,7 @@ class ClusterOptions:
         self.node_type = DAEMON_TYPE_TSERVER
         self.is_shell_master = False
         self.is_startup_command = False
-        self.enable_ysql = True
+        self.enable_ysql = None
         self.install_if_needed = False
 
     def parse_flag_args(self, flag_args):
@@ -575,7 +586,7 @@ class ClusterOptions:
         if hasattr(args, "master") and args.master:
             self.node_type = DAEMON_TYPE_MASTER
 
-        if hasattr(args, "disable_ysql"):
+        if hasattr(args, "disable_ysql") and args.disable_ysql is not None:
             self.enable_ysql = not args.disable_ysql
 
         if args.install_if_needed and not self.installation_dir:
@@ -688,8 +699,7 @@ class ClusterControl:
     def is_ysql_enabled(self):
         return self.cluster_config.get(
             "enable_postgres",
-            self.cluster_config.get(
-                "enable_ysql", self.options.enable_ysql))
+            self.cluster_config.get("enable_ysql", self.options.enable_ysql))
 
     def get_replication_factor(self):
         return self.cluster_config.get("replication_factor") or self.options.replication_factor
@@ -843,13 +853,25 @@ class ClusterControl:
         # When the cluster is being created, YB data directory may not be ready on disk.
         # In that case, use replication_factor to determine number of servers.
         if self.creating_cluster:
-            return self.get_replication_factor()
+            num_servers = self.get_replication_factor()
+            explanation_str = "replication factor"
         else:
             drives = self.get_drive_paths()
             if not drives:
-                return 0
-            return len(glob.glob("{}/*/{}/yb-data/{}".format(
-                self.options.cluster_base_dir, drives[0], daemon_type)))
+                num_servers = 0
+                explanation_str = "the absence of drive paths"
+            else:
+                glob_pattern = "{}/*/{}/yb-data/{}".format(
+                        self.options.cluster_base_dir, drives[0], daemon_type)
+                glob_results = glob.glob(glob_pattern)
+                num_servers = len(glob_results)
+                explanation_str = "glob results for data dirs: pattern is %s, results are: %s" % (
+                    glob_pattern, str(glob_results))
+        if self.args.verbose:
+            logging.info(
+                    "Number of servers for daemon type %s determined as %d based on " % (
+                        daemon_type, num_servers) + explanation_str)
+        return num_servers
 
     def get_number_of_servers_map(self):
         return {
@@ -864,8 +886,30 @@ class ClusterControl:
 
     def get_pid(self, daemon_id):
         try:
-            pid = subprocess.check_output(
-                ["pgrep", "-f", self.get_pgrep_regex(daemon_id)]).strip().split()[0]
+            pgrep_output = subprocess.check_output(
+                ["pgrep", "-lf", self.get_pgrep_regex(daemon_id)]
+            ).strip()
+            data_dirs_re_match = FS_DATA_DIRS_ARG_RE.search(pgrep_output)
+            if data_dirs_re_match:
+                data_dirs_of_process = data_dirs_re_match.group(1)
+                expected_data_dirs = ','.join(self.get_base_node_dirs(daemon_id.index))
+                if self.args.verbose:
+                    logging.info(
+                            "Data dirs of the running process with daemon id %s: %s",
+                            daemon_id, data_dirs_of_process)
+                if data_dirs_of_process != expected_data_dirs:
+                    error_msg = (
+                        "When looking for process with daemon id %s, we found the following "
+                        "running process with data dirs %s but expected data dirs to be %s: %s" % (
+                            daemon_id, data_dirs_of_process, expected_data_dirs, pgrep_output))
+                    logging.error(error_msg)
+                    raise ValueError(error_msg)
+
+            if self.args.verbose:
+                logging.info(
+                        "pgrep output when looking for daemon id %s: %s",
+                        daemon_id, pgrep_output)
+            pid = pgrep_output.split()[0]
             return int(pid)
         except subprocess.CalledProcessError as e:
             # From man pgrep
@@ -926,6 +970,9 @@ class ClusterControl:
 
         if not self.options.is_shell_master:
             command_list += ["--master_addresses {}".format(self.options.master_addresses)]
+
+        if self.options.enable_ysql:
+            command_list.append("--use_initial_sys_catalog_snapshot")
 
         return self.customize_flags(command_list, self.options.master_flags)
 
@@ -1103,6 +1150,8 @@ class ClusterControl:
         # 'Enough' here means that the number of live tservers reported to the master should be
         # equal to the number of TS we have started -- based on directories we have on the FS.
         yb_admin_binary_path = self.options.get_binary_path("yb-admin")
+        if not self.options.master_addresses:
+            raise ValueError("Cannot wait for cluster without knowing master addresses")
         cmd_list_tservers = [yb_admin_binary_path,
                              "--master_addresses",
                              self.options.master_addresses,
@@ -1144,7 +1193,7 @@ class ClusterControl:
                 logging.info("Waiting for all tablet servers to register: {}/{}".format(
                     num_yb_admin_ts, num_alive_ts))
 
-        logging.info("Waiting for master leader election tablet server registration.")
+        logging.info("Waiting for master leader election and tablet server registration.")
         if not retry_call_with_timeout(call_check_for_ts, self.options.timeout):
             logging.error("Failed waiting for {} tservers, got {}".format(
                 num_alive_ts, num_yb_admin_ts))
@@ -1409,11 +1458,10 @@ class ClusterControl:
         print("Setup Redis successful.")
 
     def run_cluster_wide_ysql_initdb(self):
-        print("Initializing cluster. This may take up to a minute.")
+        print("Initializing cluster.")
         initdb_binary_path = self.options.get_binary_path("initdb")
 
-        logging.info("Running initdb to initialize YSQL metadata in the YugaByte cluster. "
-                     "This may take up to a minute.")
+        logging.info("Running initdb to initialize YSQL metadata in the YugaByte DB cluster.")
         with SetAndRestoreEnv(
             {'FLAGS_pggate_master_addresses': self.options.master_addresses,
              'YB_ENABLED_IN_POSTGRES': '1'}):
