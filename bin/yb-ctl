@@ -454,6 +454,12 @@ class DaemonId:
     def __str__(self):
         return "{}-{}".format(self.daemon_type, self.index)
 
+    def __hash__(self):
+            return hash(str(self))
+
+    def __eq__(self, other):
+        return self.daemon_type == other.daemon_type and self.index == other.index
+
     def is_master(self):
         return self.daemon_type == DAEMON_TYPE_MASTER
 
@@ -586,8 +592,27 @@ class ClusterOptions:
         if hasattr(args, "master") and args.master:
             self.node_type = DAEMON_TYPE_MASTER
 
+        ysql_explicitly_enabled = False
+        ysql_explicitly_disabled = False
+
         if hasattr(args, "disable_ysql") and args.disable_ysql is not None:
             self.enable_ysql = not args.disable_ysql
+            ysql_explicitly_enabled = True
+            if args.verbose:
+                logging.info(
+                        "Found --disable_ysql command-line option, setting enable_ysql=%s",
+                        self.enable_ysql)
+
+        if hasattr(args, "enable_ysql") and args.enable_ysql is not None:
+            self.enable_ysql = args.enable_ysql
+            ysql_explicitly_disabled = True
+            if args.verbose:
+                logging.info(
+                        "Found --enable_ysql command-line option, setting enable_ysql=%s",
+                        self.enable_ysql)
+
+        if ysql_explicitly_enabled and ysql_explicitly_disabled:
+            raise ExitWithError("--disable_ysql and --enable_ysql cannot both be specified")
 
         if args.install_if_needed and not self.installation_dir:
             installer = Installer()
@@ -666,6 +691,7 @@ class ClusterControl:
 
         self.setup_parsing()
         self.log_file = None
+        self.already_running_daemons = set()
 
     def setup_base_parser(self, command, help=None):
         subparser = self.subparsers.add_parser(command, help=help)
@@ -691,15 +717,26 @@ class ClusterControl:
             # No configuration file -- let's create an empty one.
             self.cluster_config = {}
 
+        loaded_cluster_config = json.loads(json.dumps(self.cluster_config))
+        if 'enable_postgres' in self.cluster_config:
+            # Migrate the deprecated "enable_postgres" cluster config option to the new format.
+            self.cluster_config['enable_ysql'] = (
+                    self.cluster_config.get('enable_ysql', False) or
+                    self.cluster_config['enable_postgres'])
+            del self.cluster_config['enable_postgres']
+            if self.cluster_config != loaded_cluster_config:
+                self.save_cluster_config()
+
     def save_cluster_config(self):
         cluster_config_path = self.get_cluster_config_file_path()
         with open(cluster_config_path, 'w') as config_file:
-            json.dump(self.cluster_config, config_file)
+            json.dump(self.cluster_config, config_file, indent=2)
 
     def is_ysql_enabled(self):
-        return self.cluster_config.get(
-            "enable_postgres",
-            self.cluster_config.get("enable_ysql", self.options.enable_ysql))
+        ysql_enabled = self.cluster_config.get("enable_ysql", self.options.enable_ysql)
+        if self.args.verbose:
+            logging.info("is_ysql_enabled returning %s", ysql_enabled)
+        return ysql_enabled
 
     def get_replication_factor(self):
         return self.cluster_config.get("replication_factor") or self.options.replication_factor
@@ -815,11 +852,14 @@ class ClusterControl:
 
             subparsers[cmd].add_argument("--enable_ysql", "--enable_postgres",
                                          action='store_true',
-                                         help="Enable YugaByte SQL API.")
+                                         help="Enable YugaByte SQL API. Useful for clusters where "
+                                              "YSQL was initially disabled.",
+                                         default=None)
 
             subparsers[cmd].add_argument("--disable_ysql",
                                          action='store_true',
-                                         help="Disable YugaByte SQL API.")
+                                         help="Disable YugaByte SQL API.",
+                                         default=None)
 
             subparsers[cmd].add_argument(
                 "--num_drives", default=1, type=int,
@@ -1019,6 +1059,7 @@ class ClusterControl:
 
         if self.get_pid(daemon_id) is not None:
             logging.info("Server {} already running".format(daemon_id))
+            self.already_running_daemons.add(daemon_id)
             return
 
         if not os.path.isdir(self.options.cluster_base_dir):
@@ -1336,13 +1377,33 @@ class ClusterControl:
 
     # Starts as well as creates. Check if the cluster exists.
     # If it does not create it else start the individual daemons.
+    #
+    # This should really be called start_cluster.
     def start(self):
         if os.path.isdir(self.options.cluster_base_dir):
-            print("Starting cluster.")
+            print("Starting cluster with base directory %s" % self.options.cluster_base_dir)
+
+            ysql_newly_enabled = False
+
             self.set_master_addresses()
             self.for_all_daemons(self.start_daemon)
             self.wait_for_cluster_or_raise()
             self.modify_placement_info()
+
+            if self.options.enable_ysql and not self.cluster_config.get('enable_ysql'):
+                if self.already_running_daemons:
+                    sys.stderr.write(
+                            "YugaByte DB was already running. If you are trying to enable YSQL "
+                            "on an existing cluster, please stop/start the cluster.\n")
+                    # To prevent YSQL from showing up in the status.
+                    self.options.enable_ysql = False
+                else:
+                    print("YSQL has been enabled on an existing cluster, running initdb")
+                    self.run_cluster_wide_ysql_initdb()
+                    self.cluster_config["enable_ysql"] = True
+                    self.save_cluster_config()
+                    ysql_newly_enabled = self.is_ysql_enabled()
+
             self.cluster_status()
         else:
             self.create()
