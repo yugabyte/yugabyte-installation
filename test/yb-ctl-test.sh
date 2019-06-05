@@ -20,38 +20,39 @@ detect_installation_dir() {
 }
 
 verify_ysqlsh() {
+  local node_to_connect=${1:-}
   log "Creating a YSQL table and inserting a bit of data"
-  (
-    set -x
-    "$installation_dir"/bin/ysqlsh <<-EOF
+  local ysqlsh_opts=""
+  if [[ -n $node_to_connect ]]; then
+    ysqlsh_opts="-h 127.0.0.$node_to_connect"
+  fi
+  "$installation_dir"/bin/ysqlsh $ysqlsh_opts <<-EOF
 create table mytable (k int primary key, v text);
-insert into mytable (k, v) values (10, 'myvalueforten');
-insert into mytable (k, v) values (20, 'myvaluefortwenty');
+insert into mytable (k, v) values (10, 'sometextvalue');
+insert into mytable (k, v) values (20, 'someothertextvalue');
 EOF
-  )
   log "Running a simple select from our YSQL table"
-  (
-    set -x
-    echo "select * from mytable where k = 10; drop table mytable;" | \
-      "$installation_dir"/bin/ysqlsh | \
-      grep "myvalueforten"
-  )
+  echo "select * from mytable where k = 10; drop table mytable;" | \
+    "$installation_dir"/bin/ysqlsh $ysqlsh_opts | \
+    grep "sometextvalue"
 }
 
 start_cluster_run_tests() {
-  root_dir=$1
-  (
-    set -x
-    "$root_dir"/yb-ctl "${yb_ctl_args[@]}" start
-    verify_ysqlsh
-    "$root_dir"/yb-ctl "${yb_ctl_args[@]}" add_node
-    verify_ysqlsh
-    "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop_node 1
-    verify_ysqlsh
-    "$root_dir"/yb-ctl "${yb_ctl_args[@]}" start_node 1
-    verify_ysqlsh
-    "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop
-  )
+  if [[ $# -ne 1 ]]; then
+    fatal "One arg expected: root directory to run in"
+  fi
+  local root_dir=$1
+  ( set -x; "$root_dir"/yb-ctl "${yb_ctl_args[@]}" start )
+  verify_ysqlsh
+  ( set -x;  "$root_dir"/yb-ctl "${yb_ctl_args[@]}" add_node )
+  verify_ysqlsh
+  ( set -x; "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop_node 1 )
+  # TODO: investigate why we can't connect and send YSQL commands to the second node here.
+  # Perhaps the master gets shut down with the first node?
+  ( set -x;  "$root_dir"/yb-ctl "${yb_ctl_args[@]}" start_node 1 )
+  verify_ysqlsh
+  ( set -x; "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop )
+  ( set -x; "$root_dir"/yb-ctl "${yb_ctl_args[@]}" destroy )
 }
 
 readonly yb_data_dir="/tmp/yb-ctl-test-data-$( date +%Y-%m-%dT%H_%M_%S )-$RANDOM"
@@ -91,16 +92,19 @@ cleanup() {
     echo "Scroll up past the various logs to where it says 'SEE THE ERROR MESSAGE'."
   fi
   log "Killing yb-master/yb-tserver processes"
+  set +e
   (
-    set -x +e
+    set -x
     pkill -f "yb-master --fs_data_dirs $yb_data_dir/" -SIGKILL
     pkill -f "yb-tserver --fs_data_dirs $yb_data_dir/" -SIGKILL
   )
-  if ! "$keep_data_dir"; then
+  set -e
+  if ! "${keep_data_dir:-false}"; then
     rm -rf "$yb_data_dir"
   else
     log "Keeping data directory around: $yb_data_dir"
   fi
+  log "Exiting with code $exit_code"
   exit "$exit_code"
 }
 
@@ -165,6 +169,7 @@ fi
 
 trap cleanup EXIT
 
+log_heading "Running basic tests"
 (
   set -x
   bin/yb-ctl "${yb_ctl_args[@]}" --install-if-needed create
@@ -173,21 +178,20 @@ trap cleanup EXIT
 detect_installation_dir
 verify_ysqlsh
 
-(
+( 
   set -x
   bin/yb-ctl "${yb_ctl_args[@]}" stop
+  bin/yb-ctl "${yb_ctl_args[@]}" destroy
 )
 
 start_cluster_run_tests "bin"
 
-log "Testing putting this version of yb-ctl inside the installation directory"
-(
-  set -x
-  cp bin/yb-ctl "$installation_dir"
-  start_cluster_run_tests "$installation_dir"
-)
+log_heading "Testing putting this version of yb-ctl inside the installation directory"
+( set -x; cp bin/yb-ctl "$installation_dir" )
+start_cluster_run_tests "$installation_dir"
 
-log "Pretending we've just built the code and are running yb-ctl from the bin directory in the code"
+log_heading \
+  "Pretending we've just built the code and are running yb-ctl from the bin directory in the code"
 yb_src_root=$HOME/yugabyte-db-src-root
 submodule_bin_dir=$yb_src_root/submodules/yugabyte-installation/bin
 mkdir -p "$submodule_bin_dir"
@@ -203,6 +207,7 @@ fi
   set -x
   "$submodule_bin_dir/yb-ctl" start
   "$submodule_bin_dir/yb-ctl" stop
+  "$submodule_bin_dir/yb-ctl" destroy
 )
 
 log_heading "TESTS SUCCEEDED"

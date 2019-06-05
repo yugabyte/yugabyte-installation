@@ -614,6 +614,9 @@ class ClusterOptions:
         if ysql_explicitly_enabled and ysql_explicitly_disabled:
             raise ExitWithError("--disable_ysql and --enable_ysql cannot both be specified")
 
+        if self.enable_ysql is None:
+            self.enable_ysql = True
+
         if args.install_if_needed and not self.installation_dir:
             installer = Installer()
             if installer.install_or_find_existing():
@@ -942,8 +945,7 @@ class ClusterControl:
                         "When looking for process with daemon id %s, we found the following "
                         "running process with data dirs %s but expected data dirs to be %s: %s" % (
                             daemon_id, data_dirs_of_process, expected_data_dirs, pgrep_output))
-                    logging.error(error_msg)
-                    raise ValueError(error_msg)
+                    raise ExitWithError(error_msg)
 
             if self.args.verbose:
                 logging.info(
