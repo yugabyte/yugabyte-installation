@@ -455,7 +455,7 @@ class DaemonId:
         return "{}-{}".format(self.daemon_type, self.index)
 
     def __hash__(self):
-            return hash(str(self))
+        return hash(str(self))
 
     def __eq__(self, other):
         return self.daemon_type == other.daemon_type and self.index == other.index
