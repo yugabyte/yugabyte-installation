@@ -486,31 +486,6 @@ class ClusterOptions:
         self.script_dir = os.path.dirname(os.path.realpath(__file__))
 
         self.installation_dir = None
-        yb_src_root_candidate = os.path.dirname(os.path.dirname(os.path.dirname(self.script_dir)))
-        # For development, assume $PARENT_DIR/yugabyte-installation/bin/yb-ctl will have sibling
-        # directories $PARENT_DIR/yugabyte or $PARENT_DIR/yugabyte-db.
-        installation_parent_dir = os.path.dirname(os.path.dirname(self.script_dir))
-
-        # "YB_USE_EXTERNAL_BUILD_ROOT" is a special way to place the build directory. This is only
-        # relevant when running yb-ctl from the yugabyte-db source tree.
-        use_external_build_root = os.environ.get('YB_USE_EXTERNAL_BUILD_ROOT') == '1'
-
-        self.installation_dirs_considered = [d for d in [
-            # yb-ctl being run from the "bin" directory of an installation.
-            os.path.dirname(self.script_dir),
-            # yb-ctl being run from $YB_SRC_ROOT/submodules/yugabyte-installation/bin
-            None if use_external_build_root else os.path.join(
-                yb_src_root_candidate,  'build', 'latest'),
-            os.path.join(yb_src_root_candidate + '__build', 'latest'),
-            # yb-ctl being run from a sibling repo to "yugabyte" or "yugabyte-db" (dev mode).
-            os.path.join(installation_parent_dir, 'yugabyte', 'build', 'latest'),
-            os.path.join(installation_parent_dir, 'yugabyte-db', 'build', 'latest')
-        ] if d is not None]
-
-        for installation_dir_candidate in self.installation_dirs_considered:
-            if is_yugabyte_db_installation_dir(installation_dir_candidate):
-                self.installation_dir = installation_dir_candidate
-                break
 
         self.num_drives = None
         self.placement_cloud = "cloud"
@@ -546,12 +521,51 @@ class ClusterOptions:
         self.is_startup_command = False
         self.enable_ysql = None
         self.install_if_needed = False
+        self.yb_ctl_verbose = False
 
     def parse_flag_args(self, flag_args):
         flags = [] if flag_args is None else flag_args.split(",")
         return [item.strip() for item in flags]
 
+    def _find_installation_dir(self):
+        yb_src_root_candidate = os.path.dirname(os.path.dirname(os.path.dirname(self.script_dir)))
+        # For development, assume $PARENT_DIR/yugabyte-installation/bin/yb-ctl will have sibling
+        # directories $PARENT_DIR/yugabyte or $PARENT_DIR/yugabyte-db.
+        installation_parent_dir = os.path.dirname(os.path.dirname(self.script_dir))
+
+        self.installation_dirs_considered = [
+            # yb-ctl being run from the "bin" directory of an installation.
+            os.path.dirname(self.script_dir),
+        ]
+
+        if os.environ.get('YB_CTL_NO_DEV_MODE') != '1':
+            # "YB_USE_EXTERNAL_BUILD_ROOT" is a special way to place the build directory. This is
+            # only relevant when running yb-ctl from the yugabyte-db source tree.
+            use_external_build_root = os.environ.get('YB_USE_EXTERNAL_BUILD_ROOT') == '1'
+
+            self.installation_dirs_considered += [
+                os.path.join(yb_src_root_candidate + '__build', 'latest') if use_external_build_root
+                else os.path.join(yb_src_root_candidate,  'build', 'latest'),
+                os.path.join(installation_parent_dir, 'yugabyte', 'build', 'latest'),
+                os.path.join(installation_parent_dir, 'yugabyte-db', 'build', 'latest')
+            ]
+
+        for installation_dir_candidate in self.installation_dirs_considered:
+            if self.yb_ctl_verbose:
+                logging.info(
+                        "Considering YugaByte DB installation directory candidate: %s",
+                        installation_dir_candidate)
+            if is_yugabyte_db_installation_dir(installation_dir_candidate):
+                self.installation_dir = installation_dir_candidate
+                if self.yb_ctl_verbose:
+                    logging.info(
+                            "Found YugaByte DB installation directory: %s",
+                            self.installation_dir)
+                break
+
     def update_options_from_args(self, args, fallback_installation_dir=None):
+        self.yb_ctl_verbose = True
+        self._find_installation_dir()
         self.replication_factor = args.replication_factor
         self.custom_binary_dir = args.binary_dir
         self.cluster_base_dir = args.data_dir
@@ -646,7 +660,10 @@ class ClusterOptions:
             raise RuntimeError("Invalid daemon node_id: {}".format(daemon_index))
 
     def get_server_binary_path(self, daemon_type):
-        return self.get_binary_path(get_binary_name_for_daemon_type(daemon_type))
+        binary_path = self.get_binary_path(get_binary_name_for_daemon_type(daemon_type))
+        if self.yb_ctl_verbose:
+            logging.info("Found binary path for daemon type %s: %s", daemon_type, binary_path)
+        return binary_path
 
     def get_binary_path(self, binary_name):
         # If the user specified a custom path, do not default back to anything else.
@@ -940,6 +957,8 @@ class ClusterControl:
                     logging.info(
                             "Data dirs of the running process with daemon id %s: %s",
                             daemon_id, data_dirs_of_process)
+                if data_dirs_of_process.startswith('"') and data_dirs_of_process.endswith('"'):
+                    data_dirs_of_process = data_dirs_of_process[1:-1]
                 if data_dirs_of_process != expected_data_dirs:
                     error_msg = (
                         "When looking for process with daemon id %s, we found the following "
@@ -1246,7 +1265,7 @@ class ClusterControl:
     def wait_for_cluster_or_raise(self):
         print("Waiting for cluster to be ready.")
         if not self.wait_for_cluster():
-            raise RuntimeError("Timed out waiting for Yugabyte cluster!")
+            raise RuntimeError("Timed out waiting for a YugaByte DB cluster!")
 
     def print_status_box(self, title, body_kv_list):
         print("-" * 100)

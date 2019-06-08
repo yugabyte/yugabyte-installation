@@ -14,7 +14,7 @@ log() {
 
 detect_installation_dir() {
   if [[ -z $installation_dir ]]; then
-    installation_dir=$( ls -td "$HOME/yugabyte-db/yugabyte-"* | head -1 )
+    installation_dir=$( ls -td "$HOME/yugabyte-db/yugabyte-"* | grep -v .tar.gz | head -1 )
     log "YugaByte DB has been automatically installed into directory: $installation_dir"
   fi
 }
@@ -113,7 +113,9 @@ print_usage() {
 Usage: ${0##*/} [<options>]
 Options:
   -h, --help
-    Print usage information
+    Print usage information.
+  -k, --keep-data-dir
+    Keep the cluster data directory instead of deleting it at the end.
   --verbose
     Produce verbose output -- passed down to yb-ctl.
 EOT
