@@ -5,11 +5,19 @@ set -euo pipefail
 export YB_PG_FALLBACK_SYSTEM_USER_NAME=$USER
 export YB_DISABLE_CALLHOME=1
 
+ysql_port=5433
+ysql_ip=127.0.0.1
+
 # This will be auto-detected the first time yb-ctl auto-downloads and installs YugaByte DB.
 installation_dir=""
 
 log() {
   echo >&2 "[$( date +%Y-%m-%dT%H:%M:%S )] $*"
+}
+
+fatal() {
+  log "$@"
+  exit 1
 }
 
 detect_installation_dir() {
@@ -20,20 +28,37 @@ detect_installation_dir() {
 }
 
 verify_ysqlsh() {
-  local node_to_connect=${1:-}
+  local node_number=${1:-1}
+
+  local ysql_ip=127.0.0.$node_number
+  log "Waiting for YSQL to listen on port $ysql_ip:$ysql_port"
+
+  local attempts=0
+  while ! nc -z "$ysql_ip" "$ysql_port"; do
+    if [[ $attempts -gt 600 ]]; then
+      fatal "Timed out waiting for YSQL on $ysql_ip:$ysql_port after $(( $attempts / 10 )) sec"
+    fi
+    sleep 0.1
+    let attempts+=1
+  done
+
+  log "YSQL listening on port $ysql_ip:$ysql_port"
+
+  # Give the YSQL a chance to start up, or we'll get an error:
+  # FATAL:  the database system is starting up
+  sleep 1
+
+  local ysql_cmd=( "$installation_dir"/bin/ysqlsh -h "$ysql_ip" -p "$ysql_port" postgres )
+  local table_name="mytable$RANDOM"
   log "Creating a YSQL table and inserting a bit of data"
-  local ysqlsh_opts=""
-  if [[ -n $node_to_connect ]]; then
-    ysqlsh_opts="-h 127.0.0.$node_to_connect"
-  fi
-  "$installation_dir"/bin/ysqlsh $ysqlsh_opts <<-EOF
-create table mytable (k int primary key, v text);
-insert into mytable (k, v) values (10, 'sometextvalue');
-insert into mytable (k, v) values (20, 'someothertextvalue');
+  "${ysql_cmd[@]}" <<-EOF
+create table $table_name (k int primary key, v text);
+insert into $table_name (k, v) values (10, 'sometextvalue');
+insert into $table_name (k, v) values (20, 'someothertextvalue');
 EOF
   log "Running a simple select from our YSQL table"
-  echo "select * from mytable where k = 10; drop table mytable;" | \
-    "$installation_dir"/bin/ysqlsh $ysqlsh_opts | \
+  echo "select * from $table_name where k = 10; drop table $table_name;" | \
+    "${ysql_cmd[@]}"| \
     grep "sometextvalue"
 }
 
@@ -47,8 +72,11 @@ start_cluster_run_tests() {
   ( set -x;  "$root_dir"/yb-ctl "${yb_ctl_args[@]}" add_node )
   verify_ysqlsh
   ( set -x; "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop_node 1 )
-  # TODO: investigate why we can't connect and send YSQL commands to the second node here.
-  # Perhaps the master gets shut down with the first node?
+  # It looks like if we try to create a table in this state, the master is trying to assign
+  # tablets to node 1, which is down, and times out:
+  #
+  # TODO: uncomment when https://github.com/YugaByte/yugabyte-db/issues/1507 is fixed.
+  # verify_ysqlsh 2
   ( set -x;  "$root_dir"/yb-ctl "${yb_ctl_args[@]}" start_node 1 )
   verify_ysqlsh
   ( set -x; "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop )
@@ -60,6 +88,16 @@ readonly yb_data_dir="/tmp/yb-ctl-test-data-$( date +%Y-%m-%dT%H_%M_%S )-$RANDOM
 yb_ctl_args=(
   --data_dir "$yb_data_dir"
 )
+
+thick_log_heading() {
+  (
+    echo
+    echo "========================================================================================"
+    echo "$@"
+    echo "========================================================================================"
+    echo
+  ) >&2
+}
 
 log_heading() {
   (
@@ -75,35 +113,42 @@ cleanup() {
   local exit_code=$?
   if [[ $exit_code -ne 0 ]]; then
     log "^^^ SEE THE ERROR MESSAGE ABOVE ^^^"
-    log_heading "Dumping all the log files below:"
+    thick_log_heading "Dumping all the log files below:"
   fi
+
   if [[ -d $yb_data_dir ]]; then
     find "$yb_data_dir" \
       -name "*.out" -or \
       -name "*.err" -or \
-      \( -name "*.log" -and -not -wholename "*/tablet-*/*.log" \) |
+      \( -name "*.log" -and -not -wholename "*/tablet-*/*.log" \) | sort |
     while read log_path; do
       log_heading "$log_path"
       cat "$log_path" >&2
     done
   fi
-  log_heading "End of dumping various logs"
+
+  thick_log_heading "End of dumping various logs"
+
   if [[ $exit_code -ne 0 ]]; then
     echo "Scroll up past the various logs to where it says 'SEE THE ERROR MESSAGE'."
   fi
-  log "Killing yb-master/yb-tserver processes"
-  set +e
-  (
-    set -x
-    pkill -f "yb-master --fs_data_dirs $yb_data_dir/" -SIGKILL
-    pkill -f "yb-tserver --fs_data_dirs $yb_data_dir/" -SIGKILL
-  )
-  set -e
-  if ! "${keep_data_dir:-false}"; then
-    rm -rf "$yb_data_dir"
+  if "$keep"; then
+    log "Not killing yb-master/yb-tserver processes or removing the data directory at $yb_data_dir"
   else
-    log "Keeping data directory around: $yb_data_dir"
+    log "Killing yb-master/yb-tserver processes"
+    set +e
+    (
+      set -x
+      pkill -f "yb-master --fs_data_dirs $yb_data_dir/" -SIGKILL
+      pkill -f "yb-tserver --fs_data_dirs $yb_data_dir/" -SIGKILL
+    )
+    set -e
+    if [[ -d $yb_data_dir ]]; then
+      log "Removing data directory at $yb_data_dir"
+      ( set -x; rm -rf "$yb_data_dir" )
+    fi
   fi
+
   log "Exiting with code $exit_code"
   exit "$exit_code"
 }
@@ -114,8 +159,8 @@ Usage: ${0##*/} [<options>]
 Options:
   -h, --help
     Print usage information.
-  -k, --keep-data-dir
-    Keep the cluster data directory instead of deleting it at the end.
+  -k, --keep
+    Keep the cluster data directory around and keep servers running on shutdown.
   --verbose
     Produce verbose output -- passed down to yb-ctl.
 EOT
@@ -126,7 +171,7 @@ EOT
 # -------------------------------------------------------------------------------------------------
 
 verbose=false
-keep_data_dir=false
+keep=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -137,8 +182,8 @@ while [[ $# -gt 0 ]]; do
     -v|--verbose)
       verbose=true
     ;;
-    -k|--keep-data-dir)
-      keep_data_dir=true
+    -k|--keep)
+      keep=true
     ;;
     *)
       print_usage >&2
@@ -180,7 +225,7 @@ log_heading "Running basic tests"
 detect_installation_dir
 verify_ysqlsh
 
-( 
+(
   set -x
   bin/yb-ctl "${yb_ctl_args[@]}" stop
   bin/yb-ctl "${yb_ctl_args[@]}" destroy
@@ -200,14 +245,17 @@ mkdir -p "$submodule_bin_dir"
 cp bin/yb-ctl "$submodule_bin_dir"
 mkdir -p "$yb_src_root/build"
 yb_build_root=$yb_src_root/build/latest
-cp -R "$installation_dir" "$yb_build_root"
+
+( set -x; time cp -R "$installation_dir" "$yb_build_root" )
 
 if [[ $OSTYPE == linux* ]]; then
-  "$yb_build_root/bin/post_install.sh"
+  ( set -x; time "$yb_build_root/bin/post_install.sh" )
 fi
 (
   set -x
+  installation_dir=$submodule_bin_dir
   "$submodule_bin_dir/yb-ctl" start
+  verify_ysqlsh
   "$submodule_bin_dir/yb-ctl" stop
   "$submodule_bin_dir/yb-ctl" destroy
 )

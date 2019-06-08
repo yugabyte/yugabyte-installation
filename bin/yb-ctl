@@ -154,12 +154,12 @@ def wait_for_proc_report_progress(proc):
     This is used as a way to indicate to user that process is still running.
     :param proc: the process whose status needs to be checked
     """
-    PROGRESS_REPORTING_DELAY_SEC = 2
+    INITIAL_SECONDS_WITHOUT_PROGRESS_REPORTING = 2
     start_time_sec = time.time()
     printed_dots = False
     while proc.poll() is None:
         # Do not add newline at the end, just report one . per second.
-        if time.time() - start_time_sec > PROGRESS_REPORTING_DELAY_SEC:
+        if time.time() - start_time_sec > INITIAL_SECONDS_WITHOUT_PROGRESS_REPORTING:
             print(".", end="")
             sys.stdout.flush()
             printed_dots = True
@@ -609,21 +609,19 @@ class ClusterOptions:
         ysql_explicitly_enabled = False
         ysql_explicitly_disabled = False
 
-        if hasattr(args, "disable_ysql") and args.disable_ysql is not None:
-            self.enable_ysql = not args.disable_ysql
-            ysql_explicitly_enabled = True
-            if args.verbose:
-                logging.info(
-                        "Found --disable_ysql command-line option, setting enable_ysql=%s",
-                        self.enable_ysql)
-
-        if hasattr(args, "enable_ysql") and args.enable_ysql is not None:
-            self.enable_ysql = args.enable_ysql
+        if hasattr(args, "disable_ysql") and args.disable_ysql:
+            self.enable_ysql = False
             ysql_explicitly_disabled = True
             if args.verbose:
-                logging.info(
-                        "Found --enable_ysql command-line option, setting enable_ysql=%s",
-                        self.enable_ysql)
+                logging.info("Found --disable_ysql command-line option, setting enable_ysql=%s",
+                             self.enable_ysql)
+
+        if hasattr(args, "enable_ysql") and args.enable_ysql:
+            self.enable_ysql = True
+            ysql_explicitly_enabled = True
+            if args.verbose:
+                logging.info("Found --enable_ysql command-line option, setting enable_ysql=%s",
+                             self.enable_ysql)
 
         if ysql_explicitly_enabled and ysql_explicitly_disabled:
             raise ExitWithError("--disable_ysql and --enable_ysql cannot both be specified")
@@ -744,8 +742,8 @@ class ClusterControl:
                     self.cluster_config.get('enable_ysql', False) or
                     self.cluster_config['enable_postgres'])
             del self.cluster_config['enable_postgres']
-            if self.cluster_config != loaded_cluster_config:
-                self.save_cluster_config()
+        if self.cluster_config != loaded_cluster_config:
+            self.save_cluster_config()
 
     def save_cluster_config(self):
         cluster_config_path = self.get_cluster_config_file_path()
@@ -928,9 +926,8 @@ class ClusterControl:
                 explanation_str = "glob results for data dirs: pattern is %s, results are: %s" % (
                     glob_pattern, str(glob_results))
         if self.args.verbose:
-            logging.info(
-                    "Number of servers for daemon type %s determined as %d based on " % (
-                        daemon_type, num_servers) + explanation_str)
+            logging.info("Number of servers for daemon type %s determined as %d based on %s",
+                         daemon_type, num_servers, explanation_str)
         return num_servers
 
     def get_number_of_servers_map(self):
@@ -946,9 +943,20 @@ class ClusterControl:
 
     def get_pid(self, daemon_id):
         try:
+            if sys.platform == 'darwin':
+                # -l: Long output.  For pgrep, print the process name in addition to the process ID
+                # for each matching process.  If used in conjunction with -f, print the process ID
+                # and the full argument list for each matching process.  For pkill, display the kill
+                # command used for each process killed.
+                pgrep_full_command_output_arg = '-l'
+            else:
+                # -a, --list-full
+                # List the full command line as well as the process ID.  (pgrep only.)
+                pgrep_full_command_output_arg = '--list-full'
             pgrep_output = subprocess.check_output(
-                ["pgrep", "-lf", self.get_pgrep_regex(daemon_id)]
+                ["pgrep", pgrep_full_command_output_arg, "-f", self.get_pgrep_regex(daemon_id)]
             ).strip()
+
             data_dirs_re_match = FS_DATA_DIRS_ARG_RE.search(pgrep_output)
             if data_dirs_re_match:
                 data_dirs_of_process = data_dirs_re_match.group(1)
