@@ -75,8 +75,10 @@ start_cluster_run_tests() {
   # It looks like if we try to create a table in this state, the master is trying to assign
   # tablets to node 1, which is down, and times out:
   #
-  # TODO: uncomment when https://github.com/YugaByte/yugabyte-db/issues/1507 is fixed.
-  verify_ysqlsh 2
+  # TODO: re-enable when https://github.com/YugaByte/yugabyte-db/issues/1508 is fixed.
+  if false; then
+    verify_ysqlsh 2
+  fi
   ( set -x;  "$root_dir"/yb-ctl "${yb_ctl_args[@]}" start_node 1 )
   verify_ysqlsh
   ( set -x; "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop )
@@ -120,6 +122,7 @@ cleanup() {
     find "$yb_data_dir" \
       -name "*.out" -or \
       -name "*.err" -or \
+      -name "*.INFO" -or \
       \( -name "*.log" -and -not -wholename "*/tablet-*/*.log" \) | sort |
     while read log_path; do
       log_heading "$log_path"
