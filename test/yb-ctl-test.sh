@@ -48,17 +48,17 @@ verify_ysqlsh() {
   # FATAL:  the database system is starting up
   sleep 1
 
-  local ysql_cmd=( "$installation_dir"/bin/ysqlsh -h "$ysql_ip" -p "$ysql_port" postgres )
+  local ysqlsh_cmd=( "$installation_dir"/bin/ysqlsh -h "$ysql_ip" -p "$ysql_port" postgres )
   local table_name="mytable$RANDOM"
   log "Creating a YSQL table and inserting a bit of data"
-  "${ysql_cmd[@]}" <<-EOF
+  "${ysqlsh_cmd[@]}" <<-EOF
 create table $table_name (k int primary key, v text);
 insert into $table_name (k, v) values (10, 'sometextvalue');
 insert into $table_name (k, v) values (20, 'someothertextvalue');
 EOF
   log "Running a simple select from our YSQL table"
   echo "select * from $table_name where k = 10; drop table $table_name;" | \
-    "${ysql_cmd[@]}"| \
+    "${ysqlsh_cmd[@]}"| \
     grep "sometextvalue"
 }
 
@@ -253,7 +253,7 @@ if [[ $OSTYPE == linux* ]]; then
 fi
 (
   set -x
-  installation_dir=$submodule_bin_dir
+  installation_dir=$yb_build_root
   "$submodule_bin_dir/yb-ctl" start
   verify_ysqlsh
   "$submodule_bin_dir/yb-ctl" stop
