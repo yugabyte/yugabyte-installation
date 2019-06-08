@@ -76,7 +76,7 @@ start_cluster_run_tests() {
   # tablets to node 1, which is down, and times out:
   #
   # TODO: uncomment when https://github.com/YugaByte/yugabyte-db/issues/1507 is fixed.
-  # verify_ysqlsh 2
+  verify_ysqlsh 2
   ( set -x;  "$root_dir"/yb-ctl "${yb_ctl_args[@]}" start_node 1 )
   verify_ysqlsh
   ( set -x; "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop )
