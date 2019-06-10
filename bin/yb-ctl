@@ -953,8 +953,9 @@ class ClusterControl:
                 # -a, --list-full
                 # List the full command line as well as the process ID.  (pgrep only.)
                 pgrep_full_command_output_arg = '--list-full'
+            pgrep_regex_str = self.get_pgrep_regex(daemon_id)
             pgrep_output = subprocess.check_output(
-                ["pgrep", pgrep_full_command_output_arg, "-f", self.get_pgrep_regex(daemon_id)]
+                ["pgrep", pgrep_full_command_output_arg, "-f", pgrep_regex_str]
             ).strip().decode('utf-8')
 
             data_dirs_re_match = FS_DATA_DIRS_ARG_RE.search(pgrep_output)
@@ -978,7 +979,14 @@ class ClusterControl:
                 logging.info(
                         "pgrep output when looking for daemon id %s: %s",
                         daemon_id, pgrep_output)
-            pid = pgrep_output.split()[0]
+            pgrep_output_lines = [line.strip() for line in pgrep_output.split("\n")]
+            pgrep_output_lines = [line for line in pgrep_output_lines]
+            if len(pgrep_output_lines) > 1:
+                raise ExitWithError(
+                    'Found multiple processes when looking for the %s process with pgrep based on '
+                    'regular expression %s:\n%s' % (daemon_id, pgrep_regex_str, pgrep_output))
+
+            pid = pgrep_output_lines[0].split()[0]
             return int(pid)
         except subprocess.CalledProcessError as e:
             # From man pgrep
@@ -1415,8 +1423,6 @@ class ClusterControl:
         if os.path.isdir(self.options.cluster_base_dir):
             print("Starting cluster with base directory %s" % self.options.cluster_base_dir)
 
-            ysql_newly_enabled = False
-
             self.set_master_addresses()
             self.for_all_daemons(self.start_daemon)
             self.wait_for_cluster_or_raise()
@@ -1434,7 +1440,6 @@ class ClusterControl:
                     self.run_cluster_wide_ysql_initdb()
                     self.cluster_config["enable_ysql"] = True
                     self.save_cluster_config()
-                    ysql_newly_enabled = self.is_ysql_enabled()
 
             self.cluster_status()
         else:
@@ -1551,7 +1556,6 @@ class ClusterControl:
         print("Setup Redis successful.")
 
     def run_cluster_wide_ysql_initdb(self):
-        print("Initializing cluster.")
         initdb_binary_path = self.options.get_binary_path("initdb")
 
         logging.info("Running initdb to initialize YSQL metadata in the YugaByte DB cluster.")
