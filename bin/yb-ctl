@@ -237,13 +237,17 @@ def download_file(url, dest_path):
     """
     Download a file and return its SHA256 sum.
     """
-    from urllib2 import urlopen, URLError, HTTPError
-    import urllib2
     try:
         with open(dest_path, 'wb') as dest_file:
-            req = urllib2.Request(url)
-            req.add_header('user-agent', 'Mozilla')
-            remote_file = urlopen(req)
+            if sys.version_info[0] >= 3:
+                import urllib.request
+                req = urllib.request.Request(url, headers={'user-agent': 'Mozilla'})
+                remote_file = urllib.request.urlopen(req)
+            else:
+                import urllib2
+                req = urllib2.Request(url)
+                req.add_header('user-agent', 'Mozilla')
+                remote_file = urllib2.urlopen(req)
             try:
                 sha256_hash = hashlib.sha256()
                 for byte_block in iter(lambda: remote_file.read(1048576), b""):
