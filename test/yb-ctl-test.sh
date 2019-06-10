@@ -177,7 +177,7 @@ EOT
 
 verbose=false
 keep=false
-python_interpreter=python2.7
+python_interpreter=python
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -190,6 +190,9 @@ while [[ $# -gt 0 ]]; do
     ;;
     -k|--keep)
       keep=true
+    ;;
+    --python27)
+      python_interpreter=python2.7
     ;;
     --python3)
       python_interpreter=python3
