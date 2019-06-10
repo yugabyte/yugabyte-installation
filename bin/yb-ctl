@@ -1420,8 +1420,6 @@ class ClusterControl:
 
     # Starts as well as creates. Check if the cluster exists.
     # If it does not create it else start the individual daemons.
-    #
-    # This should really be called start_cluster.
     def start_cmd_impl(self):
         if os.path.isdir(self.options.cluster_base_dir):
             print("Starting cluster with base directory %s" % self.options.cluster_base_dir)
