@@ -363,7 +363,6 @@ class Installer:
                 os.remove(download_dest_path)
 
         if need_to_download:
-            downloader = urllib.FancyURLopener()
             logging.info("Downloading %s to %s", download_url, download_dest_path)
             downloaded_sha256_sum = download_file(download_url, download_dest_path)
             if downloaded_sha256_sum != expected_sha256_sum:
