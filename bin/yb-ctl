@@ -1436,7 +1436,7 @@ class ClusterControl:
                     self.save_cluster_config()
                     ysql_newly_enabled = self.is_ysql_enabled()
 
-            self.cluster_status_cmd_impl()
+            self.cluster_status()
         else:
             self.create_cmd_impl()
 
