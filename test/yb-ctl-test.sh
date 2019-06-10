@@ -67,11 +67,11 @@ start_cluster_run_tests() {
     fatal "One arg expected: root directory to run in"
   fi
   local root_dir=$1
-  ( set -x; "$root_dir"/yb-ctl "${yb_ctl_args[@]}" start )
+  ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" start )
   verify_ysqlsh
-  ( set -x;  "$root_dir"/yb-ctl "${yb_ctl_args[@]}" add_node )
+  ( set -x;  "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" add_node )
   verify_ysqlsh
-  ( set -x; "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop_node 1 )
+  ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop_node 1 )
   # It looks like if we try to create a table in this state, the master is trying to assign
   # tablets to node 1, which is down, and times out:
   #
@@ -79,10 +79,10 @@ start_cluster_run_tests() {
   if false; then
     verify_ysqlsh 2
   fi
-  ( set -x;  "$root_dir"/yb-ctl "${yb_ctl_args[@]}" start_node 1 )
+  ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" start_node 1 )
   verify_ysqlsh
-  ( set -x; "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop )
-  ( set -x; "$root_dir"/yb-ctl "${yb_ctl_args[@]}" destroy )
+  ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop )
+  ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" destroy )
 }
 
 readonly yb_data_dir="/tmp/yb-ctl-test-data-$( date +%Y-%m-%dT%H_%M_%S )-$RANDOM"
@@ -164,6 +164,8 @@ Options:
     Print usage information.
   -k, --keep
     Keep the cluster data directory around and keep servers running on shutdown.
+  --python3
+    Use python3
   --verbose
     Produce verbose output -- passed down to yb-ctl.
 EOT
@@ -175,6 +177,7 @@ EOT
 
 verbose=false
 keep=false
+python_interpreter=python2.7
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -187,6 +190,13 @@ while [[ $# -gt 0 ]]; do
     ;;
     -k|--keep)
       keep=true
+    ;;
+    --python3)
+      python_interpreter=python3
+    ;;
+    --python_interpreter)
+      python_interpreter=$2
+      shift
     ;;
     *)
       print_usage >&2
@@ -222,7 +232,7 @@ trap cleanup EXIT
 log_heading "Running basic tests"
 (
   set -x
-  bin/yb-ctl "${yb_ctl_args[@]}" --install-if-needed create
+  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" --install-if-needed create
 )
 
 detect_installation_dir
@@ -230,8 +240,8 @@ verify_ysqlsh
 
 (
   set -x
-  bin/yb-ctl "${yb_ctl_args[@]}" stop
-  bin/yb-ctl "${yb_ctl_args[@]}" destroy
+  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" stop
+  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" destroy
 )
 
 start_cluster_run_tests "bin"
@@ -257,10 +267,10 @@ fi
 (
   set -x
   installation_dir=$yb_build_root
-  "$submodule_bin_dir/yb-ctl" start
+  "$python_interpreter" "$submodule_bin_dir/yb-ctl" start
   verify_ysqlsh
-  "$submodule_bin_dir/yb-ctl" stop
-  "$submodule_bin_dir/yb-ctl" destroy
+  "$python_interpreter" "$submodule_bin_dir/yb-ctl" stop
+  "$python_interpreter" "$submodule_bin_dir/yb-ctl" destroy
 )
 
 log_heading "TESTS SUCCEEDED"

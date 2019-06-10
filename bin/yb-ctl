@@ -263,7 +263,7 @@ def mkdir_p(dir_path):
     try:
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
-    except IOError, ex:
+    except IOError as ex:
         if os.path.isdir(dir_path):
             # Concurrent directory creation.
             return
@@ -564,7 +564,7 @@ class ClusterOptions:
                 break
 
     def update_options_from_args(self, args, fallback_installation_dir=None):
-        self.yb_ctl_verbose = True
+        self.yb_ctl_verbose = args.verbose
         self._find_installation_dir()
         self.replication_factor = args.replication_factor
         self.custom_binary_dir = args.binary_dir
@@ -713,7 +713,7 @@ class ClusterControl:
 
     def setup_base_parser(self, command, help=None):
         subparser = self.subparsers.add_parser(command, help=help)
-        func = getattr(self, command, None)
+        func = getattr(self, "%s_cmd_impl" % command, None)
         if not func:
             raise RuntimeError("Invalid command: {}".format(command))
         subparser.set_defaults(func=func)
@@ -955,7 +955,7 @@ class ClusterControl:
                 pgrep_full_command_output_arg = '--list-full'
             pgrep_output = subprocess.check_output(
                 ["pgrep", pgrep_full_command_output_arg, "-f", self.get_pgrep_regex(daemon_id)]
-            ).strip()
+            ).strip().decode('utf-8')
 
             data_dirs_re_match = FS_DATA_DIRS_ARG_RE.search(pgrep_output)
             if data_dirs_re_match:
@@ -1242,7 +1242,10 @@ class ClusterControl:
             # 2dac590eefb3429bb4d315c51e20f774        127.0.0.2:9100
             # cb703e947033465a80c85577501cc93c        127.0.0.4:9100
 
-            output = call_get_output_maybe_error(cmd_list_tservers, should_get_error)
+            output = call_get_output_maybe_error(
+                    cmd_list_tservers,
+                    should_get_error
+                ).decode('utf-8')
             num_yb_admin_ts = len(output.splitlines()) - 1
             if num_yb_admin_ts == num_alive_ts:
                 # This will not work if you have stopped/removed a node and the master is still
@@ -1376,7 +1379,7 @@ class ClusterControl:
             for daemon_index in range(1, num_servers + 1):
                 fn(DaemonId(daemon_type, daemon_index))
 
-    def create(self):
+    def create_cmd_impl(self):
         print("Creating cluster.")
         self.creating_cluster = True
         server_counts = self.options.replication_factor
@@ -1408,7 +1411,7 @@ class ClusterControl:
     # If it does not create it else start the individual daemons.
     #
     # This should really be called start_cluster.
-    def start(self):
+    def start_cmd_impl(self):
         if os.path.isdir(self.options.cluster_base_dir):
             print("Starting cluster with base directory %s" % self.options.cluster_base_dir)
 
@@ -1433,16 +1436,16 @@ class ClusterControl:
                     self.save_cluster_config()
                     ysql_newly_enabled = self.is_ysql_enabled()
 
-            self.cluster_status()
+            self.cluster_status_cmd_impl()
         else:
-            self.create()
+            self.create_cmd_impl()
 
     # Stops the cluster.
-    def stop(self):
+    def stop_cmd_impl(self):
         print("Stopping cluster.")
         self.for_all_daemons(self.stop_daemon)
 
-    def destroy(self):
+    def destroy_cmd_impl(self):
         print("Destroying cluster.")
         self.for_all_daemons(self.stop_daemon)
 
@@ -1452,7 +1455,7 @@ class ClusterControl:
             logging.info("Removing base directory: {}".format(top_level))
             shutil.rmtree(self.options.cluster_base_dir)
 
-    def restart(self):
+    def restart_cmd_impl(self):
         self.set_master_addresses()
         print("Stopping cluster.")
         self.for_all_daemons(self.stop_daemon)
@@ -1462,7 +1465,7 @@ class ClusterControl:
         self.modify_placement_info()
         self.cluster_status()
 
-    def wipe_restart(self):
+    def wipe_restart_cmd_impl(self):
         num_servers_map = self.get_number_of_servers_map()
         self.set_master_addresses()
         self.destroy()
@@ -1472,7 +1475,7 @@ class ClusterControl:
         self.modify_placement_info()
         self.cluster_status()
 
-    def add_node(self):
+    def add_node_cmd_impl(self):
         print("Adding node.")
         self.set_master_addresses(running_only=True)
         num_servers = self.get_number_of_servers(self.options.node_type)
@@ -1486,7 +1489,7 @@ class ClusterControl:
         self.change_config_if_master(daemon_id, "ADD_SERVER")
         self.show_node_status(daemon_id.index)
 
-    def remove_node(self):
+    def remove_node_cmd_impl(self):
         print("Stopping node {}-{}.".format(self.options.node_type, self.args.node_id))
         # Note: remove_node in its current implementation just stops a node and does not
         # decommission it. To properly decommission a local "node", we'll need
@@ -1495,7 +1498,7 @@ class ClusterControl:
         logging.info("Stopping server {}".format(daemon_id))
         self.stop_daemon(daemon_id)
 
-    def start_node(self):
+    def start_node_cmd_impl(self):
         print("Starting node {}-{}.".format(self.options.node_type, self.args.node_id))
         daemon_id = DaemonId(self.options.node_type, self.args.node_id)
         self.set_master_addresses()
@@ -1503,10 +1506,10 @@ class ClusterControl:
         self.wait_for_cluster_or_raise()
         self.show_node_status(daemon_id.index)
 
-    def stop_node(self):
-        self.remove_node()
+    def stop_node_cmd_impl(self):
+        self.remove_node_cmd_impl()
 
-    def restart_node(self):
+    def restart_node_cmd_impl(self):
         print("Stopping node {}-{}.".format(self.options.node_type, self.args.node_id))
         daemon_id = DaemonId(self.options.node_type, self.args.node_id)
         self.stop_daemon(daemon_id)
@@ -1517,7 +1520,7 @@ class ClusterControl:
         self.start_daemon(daemon_id)
         self.wait_for_cluster_or_raise()
 
-    def status(self):
+    def status_cmd_impl(self):
         if not os.path.isdir(self.options.cluster_base_dir):
             print("No cluster data found at: '{}'".format(self.options.cluster_base_dir))
             return
@@ -1528,8 +1531,8 @@ class ClusterControl:
         for index in range(1, max_nodes + 1):
             self.show_node_status(index, server_counts)
 
-    def setup_redis(self):
-        print("Setting up YugaByte support for Redis API.")
+    def setup_redis_cmd_impl(self):
+        print("Setting up YugaByte DB support for Redis API.")
         yb_admin_binary_path = self.options.get_binary_path("yb-admin")
         self.set_master_addresses()
         self.wait_for_cluster_or_raise()
@@ -1612,7 +1615,10 @@ class ClusterControl:
                 self.args,
                 fallback_installation_dir=self.cluster_config.get("installation_dir"))
 
-        self.args.func()
+        if hasattr(self.args, 'func'):
+            self.args.func()
+        else:
+            self.parser.print_help()
 
     def cleanup(self, keep_log_file_and_dump_to_stderr=False):
         # Never created a temp log file to begin with.
@@ -1624,7 +1630,10 @@ class ClusterControl:
             # If we called the atexit handler and we have a file, it means we must have had errors.
             if keep_log_file_and_dump_to_stderr:
                 with open(self.log_file, "rb") as log:
-                    shutil.copyfileobj(log, sys.stderr)
+                    if sys.version_info[0] >= 3:
+                        shutil.copyfileobj(log, sys.stderr.buffer)
+                    else:
+                        shutil.copyfileobj(log, sys.stderr)
                 print("^^^ Encountered errors ^^^")
             # Whichever cleanup comes first should remove the file.
             # TODO: Maybe keep the log file around and allow the user to upload a gist with the log.
@@ -1636,6 +1645,6 @@ if __name__ == "__main__":
         control = ClusterControl()
         control.run()
         control.cleanup()
-    except ExitWithError, ex:
+    except ExitWithError as ex:
         logging.error(ex)
         sys.exit(1)
