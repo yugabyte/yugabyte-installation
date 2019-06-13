@@ -296,6 +296,14 @@ def is_yugabyte_db_installation_dir(top_dir):
         ])
 
 
+def remove_surrounding_quotes(s):
+    if len(s) >= 2:
+        for quote in ['"', "'"]:
+            if s.startswith(quote) and s.endswith(quote):
+                return s[1:-1]
+    return s
+
+
 class Installer:
     YUGABYTE_DB_VERSION = '1.2.10.0'
     DOWNLOAD_URL_PATTERN = 'https://downloads.yugabyte.com/yugabyte-ce-{version}-{os}.tar.gz'
@@ -969,8 +977,7 @@ class ClusterControl:
                     logging.info(
                             "Data dirs of the running process with daemon id %s: %s",
                             daemon_id, data_dirs_of_process)
-                if data_dirs_of_process.startswith('"') and data_dirs_of_process.endswith('"'):
-                    data_dirs_of_process = data_dirs_of_process[1:-1]
+                data_dirs_of_process = remove_surrounding_quotes(data_dirs_of_process):
                 if data_dirs_of_process != expected_data_dirs:
                     error_msg = (
                         "When looking for process with daemon id %s, we found the following "
