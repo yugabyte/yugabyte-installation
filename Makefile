@@ -3,5 +3,4 @@
 .PHONY: test
 
 test:
-	test/test.sh
-
+	test/yb-ctl-test.sh

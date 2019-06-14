@@ -1,4 +1,4 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python
 
 # Copyright (c) YugaByte, Inc.
 #
@@ -94,6 +94,11 @@ SLEEP_TIME_IN_SEC = 1
 MAX_WAIT_SECONDS = 45
 DEFAULT_REPLICATION_FACTOR = 1
 
+# A regex to get data directories out a command line of a running process.
+# Needs to match e.g. the following command line snippet:
+# --fs_data_dirs /tmp/yb-ctl-test-data-2019-06-05T14_14_12-4841/node-1/disk-1
+FS_DATA_DIRS_ARG_RE = re.compile(r'--fs_data_dirs[ =](\S+)')
+
 
 def call_get_output_maybe_error(cmd_list, should_get_error=False):
     """
@@ -149,13 +154,19 @@ def wait_for_proc_report_progress(proc):
     This is used as a way to indicate to user that process is still running.
     :param proc: the process whose status needs to be checked
     """
+    INITIAL_SECONDS_WITHOUT_PROGRESS_REPORTING = 2
+    start_time_sec = time.time()
+    printed_dots = False
     while proc.poll() is None:
         # Do not add newline at the end, just report one . per second.
-        print(".", end="")
-        sys.stdout.flush()
+        if time.time() - start_time_sec > INITIAL_SECONDS_WITHOUT_PROGRESS_REPORTING:
+            print(".", end="")
+            sys.stdout.flush()
+            printed_dots = True
         time.sleep(1)
-    # Add a newline, since we did not do so during above printing of dots.
-    print()
+    if printed_dots:
+        # Add a newline, since we did not do so during above printing of dots.
+        print()
 
 
 def is_env_var_true(env_var_name):
@@ -226,13 +237,17 @@ def download_file(url, dest_path):
     """
     Download a file and return its SHA256 sum.
     """
-    from urllib2 import urlopen, URLError, HTTPError
-    import urllib2
     try:
         with open(dest_path, 'wb') as dest_file:
-            req = urllib2.Request(url)
-            req.add_header('user-agent', 'Mozilla')
-            remote_file = urlopen(req)
+            if sys.version_info[0] >= 3:
+                import urllib.request
+                req = urllib.request.Request(url, headers={'user-agent': 'Mozilla'})
+                remote_file = urllib.request.urlopen(req)
+            else:
+                import urllib2
+                req = urllib2.Request(url)
+                req.add_header('user-agent', 'Mozilla')
+                remote_file = urllib2.urlopen(req)
             try:
                 sha256_hash = hashlib.sha256()
                 for byte_block in iter(lambda: remote_file.read(1048576), b""):
@@ -252,7 +267,7 @@ def mkdir_p(dir_path):
     try:
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
-    except IOError, ex:
+    except IOError as ex:
         if os.path.isdir(dir_path):
             # Concurrent directory creation.
             return
@@ -281,12 +296,20 @@ def is_yugabyte_db_installation_dir(top_dir):
         ])
 
 
+def remove_surrounding_quotes(s):
+    if len(s) >= 2:
+        for quote in ['"', "'"]:
+            if s.startswith(quote) and s.endswith(quote):
+                return s[1:-1]
+    return s
+
+
 class Installer:
-    YUGABYTE_DB_VERSION = '1.2.6.0'
+    YUGABYTE_DB_VERSION = '1.2.10.0'
     DOWNLOAD_URL_PATTERN = 'https://downloads.yugabyte.com/yugabyte-ce-{version}-{os}.tar.gz'
     SHA256_SUM_BY_OS = {
-        'darwin': 'dde32b6fae227f4d9743c346e02903c3b3b19f36dd335cfd39348200ad465adb',
-        'linux': '0025e8630ff0d44d3b7e780c40595f64acc558ad3901bfe8fd31af88ab696f94'
+        'darwin': 'ee5ba828b0b702016c4a6003cc4f3bda3eee0e0ffbb954dd409d55fde7687d97',
+        'linux': '34f0426f1d0b9d61a8cf72c3328c9d3a538f5c8267669c0e02b780b124b9e75b'
     }
 
     def __init__(self, only_find_existing=False):
@@ -352,7 +375,6 @@ class Installer:
                 os.remove(download_dest_path)
 
         if need_to_download:
-            downloader = urllib.FancyURLopener()
             logging.info("Downloading %s to %s", download_url, download_dest_path)
             downloaded_sha256_sum = download_file(download_url, download_dest_path)
             if downloaded_sha256_sum != expected_sha256_sum:
@@ -443,6 +465,12 @@ class DaemonId:
     def __str__(self):
         return "{}-{}".format(self.daemon_type, self.index)
 
+    def __hash__(self):
+        return hash(str(self))
+
+    def __eq__(self, other):
+        return self.daemon_type == other.daemon_type and self.index == other.index
+
     def is_master(self):
         return self.daemon_type == DAEMON_TYPE_MASTER
 
@@ -469,31 +497,6 @@ class ClusterOptions:
         self.script_dir = os.path.dirname(os.path.realpath(__file__))
 
         self.installation_dir = None
-        yb_src_root_candidate = os.path.dirname(os.path.dirname(os.path.dirname(self.script_dir)))
-        # For development, assume $PARENT_DIR/yugabyte-installation/bin/yb-ctl will have sibling
-        # directories $PARENT_DIR/yugabyte or $PARENT_DIR/yugabyte-db.
-        installation_parent_dir = os.path.dirname(os.path.dirname(self.script_dir))
-
-        # "YB_USE_EXTERNAL_BUILD_ROOT" is a special way to place the build directory. This is only
-        # relevant when running yb-ctl from the yugabyte-db source tree.
-        use_external_build_root = os.environ.get('YB_USE_EXTERNAL_BUILD_ROOT') == '1'
-
-        self.installation_dirs_considered = [d for d in [
-            # yb-ctl being run from the "bin" directory of an installation.
-            os.path.dirname(self.script_dir),
-            # yb-ctl being run from $YB_SRC_ROOT/submodules/yugabyte-installation/bin
-            None if use_external_build_root else os.path.join(
-                yb_src_root_candidate,  'build', 'latest'),
-            os.path.join(yb_src_root_candidate + '__build', 'latest'),
-            # yb-ctl being run from a sibling repo to "yugabyte" or "yugabyte-db" (dev mode).
-            os.path.join(installation_parent_dir, 'yugabyte', 'build', 'latest'),
-            os.path.join(installation_parent_dir, 'yugabyte-db', 'build', 'latest')
-        ] if d is not None]
-
-        for installation_dir_candidate in self.installation_dirs_considered:
-            if is_yugabyte_db_installation_dir(installation_dir_candidate):
-                self.installation_dir = installation_dir_candidate
-                break
 
         self.num_drives = None
         self.placement_cloud = "cloud"
@@ -527,14 +530,53 @@ class ClusterOptions:
         self.node_type = DAEMON_TYPE_TSERVER
         self.is_shell_master = False
         self.is_startup_command = False
-        self.enable_ysql = True
+        self.enable_ysql = None
         self.install_if_needed = False
+        self.yb_ctl_verbose = False
 
     def parse_flag_args(self, flag_args):
         flags = [] if flag_args is None else flag_args.split(",")
         return [item.strip() for item in flags]
 
+    def _find_installation_dir(self):
+        yb_src_root_candidate = os.path.dirname(os.path.dirname(os.path.dirname(self.script_dir)))
+        # For development, assume $PARENT_DIR/yugabyte-installation/bin/yb-ctl will have sibling
+        # directories $PARENT_DIR/yugabyte or $PARENT_DIR/yugabyte-db.
+        installation_parent_dir = os.path.dirname(os.path.dirname(self.script_dir))
+
+        self.installation_dirs_considered = [
+            # yb-ctl being run from the "bin" directory of an installation.
+            os.path.dirname(self.script_dir),
+        ]
+
+        if os.environ.get('YB_CTL_NO_DEV_MODE') != '1':
+            # "YB_USE_EXTERNAL_BUILD_ROOT" is a special way to place the build directory. This is
+            # only relevant when running yb-ctl from the yugabyte-db source tree.
+            use_external_build_root = os.environ.get('YB_USE_EXTERNAL_BUILD_ROOT') == '1'
+
+            self.installation_dirs_considered += [
+                os.path.join(yb_src_root_candidate + '__build', 'latest') if use_external_build_root
+                else os.path.join(yb_src_root_candidate,  'build', 'latest'),
+                os.path.join(installation_parent_dir, 'yugabyte', 'build', 'latest'),
+                os.path.join(installation_parent_dir, 'yugabyte-db', 'build', 'latest')
+            ]
+
+        for installation_dir_candidate in self.installation_dirs_considered:
+            if self.yb_ctl_verbose:
+                logging.info(
+                        "Considering YugaByte DB installation directory candidate: %s",
+                        installation_dir_candidate)
+            if is_yugabyte_db_installation_dir(installation_dir_candidate):
+                self.installation_dir = installation_dir_candidate
+                if self.yb_ctl_verbose:
+                    logging.info(
+                            "Found YugaByte DB installation directory: %s",
+                            self.installation_dir)
+                break
+
     def update_options_from_args(self, args, fallback_installation_dir=None):
+        self.yb_ctl_verbose = args.verbose
+        self._find_installation_dir()
         self.replication_factor = args.replication_factor
         self.custom_binary_dir = args.binary_dir
         self.cluster_base_dir = args.data_dir
@@ -575,8 +617,28 @@ class ClusterOptions:
         if hasattr(args, "master") and args.master:
             self.node_type = DAEMON_TYPE_MASTER
 
-        if hasattr(args, "disable_ysql"):
-            self.enable_ysql = not args.disable_ysql
+        ysql_explicitly_enabled = False
+        ysql_explicitly_disabled = False
+
+        if hasattr(args, "disable_ysql") and args.disable_ysql:
+            self.enable_ysql = False
+            ysql_explicitly_disabled = True
+            if args.verbose:
+                logging.info("Found --disable_ysql command-line option, setting enable_ysql=%s",
+                             self.enable_ysql)
+
+        if hasattr(args, "enable_ysql") and args.enable_ysql:
+            self.enable_ysql = True
+            ysql_explicitly_enabled = True
+            if args.verbose:
+                logging.info("Found --enable_ysql command-line option, setting enable_ysql=%s",
+                             self.enable_ysql)
+
+        if ysql_explicitly_enabled and ysql_explicitly_disabled:
+            raise ExitWithError("--disable_ysql and --enable_ysql cannot both be specified")
+
+        if self.enable_ysql is None:
+            self.enable_ysql = True
 
         if args.install_if_needed and not self.installation_dir:
             installer = Installer()
@@ -607,7 +669,10 @@ class ClusterOptions:
             raise RuntimeError("Invalid daemon node_id: {}".format(daemon_index))
 
     def get_server_binary_path(self, daemon_type):
-        return self.get_binary_path(get_binary_name_for_daemon_type(daemon_type))
+        binary_path = self.get_binary_path(get_binary_name_for_daemon_type(daemon_type))
+        if self.yb_ctl_verbose:
+            logging.info("Found binary path for daemon type %s: %s", daemon_type, binary_path)
+        return binary_path
 
     def get_binary_path(self, binary_name):
         # If the user specified a custom path, do not default back to anything else.
@@ -655,10 +720,11 @@ class ClusterControl:
 
         self.setup_parsing()
         self.log_file = None
+        self.already_running_daemons = set()
 
     def setup_base_parser(self, command, help=None):
         subparser = self.subparsers.add_parser(command, help=help)
-        func = getattr(self, command, None)
+        func = getattr(self, "%s_cmd_impl" % command, None)
         if not func:
             raise RuntimeError("Invalid command: {}".format(command))
         subparser.set_defaults(func=func)
@@ -680,16 +746,26 @@ class ClusterControl:
             # No configuration file -- let's create an empty one.
             self.cluster_config = {}
 
+        loaded_cluster_config = json.loads(json.dumps(self.cluster_config))
+        if 'enable_postgres' in self.cluster_config:
+            # Migrate the deprecated "enable_postgres" cluster config option to the new format.
+            self.cluster_config['enable_ysql'] = (
+                    self.cluster_config.get('enable_ysql', False) or
+                    self.cluster_config['enable_postgres'])
+            del self.cluster_config['enable_postgres']
+        if self.cluster_config != loaded_cluster_config:
+            self.save_cluster_config()
+
     def save_cluster_config(self):
         cluster_config_path = self.get_cluster_config_file_path()
         with open(cluster_config_path, 'w') as config_file:
-            json.dump(self.cluster_config, config_file)
+            json.dump(self.cluster_config, config_file, indent=2)
 
     def is_ysql_enabled(self):
-        return self.cluster_config.get(
-            "enable_postgres",
-            self.cluster_config.get(
-                "enable_ysql", self.options.enable_ysql))
+        ysql_enabled = self.cluster_config.get("enable_ysql", self.options.enable_ysql)
+        if self.args.verbose:
+            logging.info("is_ysql_enabled returning %s", ysql_enabled)
+        return ysql_enabled
 
     def get_replication_factor(self):
         return self.cluster_config.get("replication_factor") or self.options.replication_factor
@@ -805,11 +881,14 @@ class ClusterControl:
 
             subparsers[cmd].add_argument("--enable_ysql", "--enable_postgres",
                                          action='store_true',
-                                         help="Enable YugaByte SQL API.")
+                                         help="Enable YugaByte SQL API. Useful for clusters where "
+                                              "YSQL was initially disabled.",
+                                         default=None)
 
             subparsers[cmd].add_argument("--disable_ysql",
                                          action='store_true',
-                                         help="Disable YugaByte SQL API.")
+                                         help="Disable YugaByte SQL API.",
+                                         default=None)
 
             subparsers[cmd].add_argument(
                 "--num_drives", default=1, type=int,
@@ -843,13 +922,24 @@ class ClusterControl:
         # When the cluster is being created, YB data directory may not be ready on disk.
         # In that case, use replication_factor to determine number of servers.
         if self.creating_cluster:
-            return self.get_replication_factor()
+            num_servers = self.get_replication_factor()
+            explanation_str = "replication factor"
         else:
             drives = self.get_drive_paths()
             if not drives:
-                return 0
-            return len(glob.glob("{}/*/{}/yb-data/{}".format(
-                self.options.cluster_base_dir, drives[0], daemon_type)))
+                num_servers = 0
+                explanation_str = "the absence of drive paths"
+            else:
+                glob_pattern = "{}/*/{}/yb-data/{}".format(
+                        self.options.cluster_base_dir, drives[0], daemon_type)
+                glob_results = glob.glob(glob_pattern)
+                num_servers = len(glob_results)
+                explanation_str = "glob results for data dirs: pattern is %s, results are: %s" % (
+                    glob_pattern, str(glob_results))
+        if self.args.verbose:
+            logging.info("Number of servers for daemon type %s determined as %d based on %s",
+                         daemon_type, num_servers, explanation_str)
+        return num_servers
 
     def get_number_of_servers_map(self):
         return {
@@ -864,8 +954,49 @@ class ClusterControl:
 
     def get_pid(self, daemon_id):
         try:
-            pid = subprocess.check_output(
-                ["pgrep", "-f", self.get_pgrep_regex(daemon_id)]).strip().split()[0]
+            if sys.platform == 'darwin':
+                # -l: Long output.  For pgrep, print the process name in addition to the process ID
+                # for each matching process.  If used in conjunction with -f, print the process ID
+                # and the full argument list for each matching process.  For pkill, display the kill
+                # command used for each process killed.
+                pgrep_full_command_output_arg = '-l'
+            else:
+                # -a, --list-full
+                # List the full command line as well as the process ID.  (pgrep only.)
+                pgrep_full_command_output_arg = '--list-full'
+            pgrep_regex_str = self.get_pgrep_regex(daemon_id)
+            pgrep_output = subprocess.check_output(
+                ["pgrep", pgrep_full_command_output_arg, "-f", pgrep_regex_str]
+            ).strip().decode('utf-8')
+
+            data_dirs_re_match = FS_DATA_DIRS_ARG_RE.search(pgrep_output)
+            if data_dirs_re_match:
+                data_dirs_of_process = data_dirs_re_match.group(1)
+                expected_data_dirs = ','.join(self.get_base_node_dirs(daemon_id.index))
+                if self.args.verbose:
+                    logging.info(
+                            "Data dirs of the running process with daemon id %s: %s",
+                            daemon_id, data_dirs_of_process)
+                data_dirs_of_process = remove_surrounding_quotes(data_dirs_of_process)
+                if data_dirs_of_process != expected_data_dirs:
+                    error_msg = (
+                        "When looking for process with daemon id %s, we found the following "
+                        "running process with data dirs %s but expected data dirs to be %s: %s" % (
+                            daemon_id, data_dirs_of_process, expected_data_dirs, pgrep_output))
+                    raise ExitWithError(error_msg)
+
+            if self.args.verbose:
+                logging.info(
+                        "pgrep output when looking for daemon id %s: %s",
+                        daemon_id, pgrep_output)
+            pgrep_output_lines = [line.strip() for line in pgrep_output.split("\n")]
+            pgrep_output_lines = [line for line in pgrep_output_lines]
+            if len(pgrep_output_lines) > 1:
+                raise ExitWithError(
+                    'Found multiple processes when looking for the %s process with pgrep based on '
+                    'regular expression %s:\n%s' % (daemon_id, pgrep_regex_str, pgrep_output))
+
+            pid = pgrep_output_lines[0].split()[0]
             return int(pid)
         except subprocess.CalledProcessError as e:
             # From man pgrep
@@ -927,6 +1058,9 @@ class ClusterControl:
         if not self.options.is_shell_master:
             command_list += ["--master_addresses {}".format(self.options.master_addresses)]
 
+        if self.options.enable_ysql:
+            command_list.append("--use_initial_sys_catalog_snapshot")
+
         return self.customize_flags(command_list, self.options.master_flags)
 
     def get_tserver_only_flags(self, daemon_id):
@@ -972,6 +1106,7 @@ class ClusterControl:
 
         if self.get_pid(daemon_id) is not None:
             logging.info("Server {} already running".format(daemon_id))
+            self.already_running_daemons.add(daemon_id)
             return
 
         if not os.path.isdir(self.options.cluster_base_dir):
@@ -1103,6 +1238,8 @@ class ClusterControl:
         # 'Enough' here means that the number of live tservers reported to the master should be
         # equal to the number of TS we have started -- based on directories we have on the FS.
         yb_admin_binary_path = self.options.get_binary_path("yb-admin")
+        if not self.options.master_addresses:
+            raise ValueError("Cannot wait for cluster without knowing master addresses")
         cmd_list_tservers = [yb_admin_binary_path,
                              "--master_addresses",
                              self.options.master_addresses,
@@ -1123,7 +1260,10 @@ class ClusterControl:
             # 2dac590eefb3429bb4d315c51e20f774        127.0.0.2:9100
             # cb703e947033465a80c85577501cc93c        127.0.0.4:9100
 
-            output = call_get_output_maybe_error(cmd_list_tservers, should_get_error)
+            output = call_get_output_maybe_error(
+                    cmd_list_tservers,
+                    should_get_error
+                ).decode('utf-8')
             num_yb_admin_ts = len(output.splitlines()) - 1
             if num_yb_admin_ts == num_alive_ts:
                 # This will not work if you have stopped/removed a node and the master is still
@@ -1144,7 +1284,7 @@ class ClusterControl:
                 logging.info("Waiting for all tablet servers to register: {}/{}".format(
                     num_yb_admin_ts, num_alive_ts))
 
-        logging.info("Waiting for master leader election tablet server registration.")
+        logging.info("Waiting for master leader election and tablet server registration.")
         if not retry_call_with_timeout(call_check_for_ts, self.options.timeout):
             logging.error("Failed waiting for {} tservers, got {}".format(
                 num_alive_ts, num_yb_admin_ts))
@@ -1154,7 +1294,7 @@ class ClusterControl:
     def wait_for_cluster_or_raise(self):
         print("Waiting for cluster to be ready.")
         if not self.wait_for_cluster():
-            raise RuntimeError("Timed out waiting for Yugabyte cluster!")
+            raise RuntimeError("Timed out waiting for a YugaByte DB cluster!")
 
     def print_status_box(self, title, body_kv_list):
         print("-" * 100)
@@ -1257,7 +1397,7 @@ class ClusterControl:
             for daemon_index in range(1, num_servers + 1):
                 fn(DaemonId(daemon_type, daemon_index))
 
-    def create(self):
+    def create_cmd_impl(self):
         print("Creating cluster.")
         self.creating_cluster = True
         server_counts = self.options.replication_factor
@@ -1287,23 +1427,38 @@ class ClusterControl:
 
     # Starts as well as creates. Check if the cluster exists.
     # If it does not create it else start the individual daemons.
-    def start(self):
+    def start_cmd_impl(self):
         if os.path.isdir(self.options.cluster_base_dir):
-            print("Starting cluster.")
+            print("Starting cluster with base directory %s" % self.options.cluster_base_dir)
+
             self.set_master_addresses()
             self.for_all_daemons(self.start_daemon)
             self.wait_for_cluster_or_raise()
             self.modify_placement_info()
+
+            if self.options.enable_ysql and not self.cluster_config.get('enable_ysql'):
+                if self.already_running_daemons:
+                    sys.stderr.write(
+                            "YugaByte DB was already running. If you are trying to enable YSQL "
+                            "on an existing cluster, please stop/start the cluster.\n")
+                    # To prevent YSQL from showing up in the status.
+                    self.options.enable_ysql = False
+                else:
+                    print("YSQL has been enabled on an existing cluster, running initdb")
+                    self.run_cluster_wide_ysql_initdb()
+                    self.cluster_config["enable_ysql"] = True
+                    self.save_cluster_config()
+
             self.cluster_status()
         else:
-            self.create()
+            self.create_cmd_impl()
 
     # Stops the cluster.
-    def stop(self):
+    def stop_cmd_impl(self):
         print("Stopping cluster.")
         self.for_all_daemons(self.stop_daemon)
 
-    def destroy(self):
+    def destroy_cmd_impl(self):
         print("Destroying cluster.")
         self.for_all_daemons(self.stop_daemon)
 
@@ -1313,7 +1468,7 @@ class ClusterControl:
             logging.info("Removing base directory: {}".format(top_level))
             shutil.rmtree(self.options.cluster_base_dir)
 
-    def restart(self):
+    def restart_cmd_impl(self):
         self.set_master_addresses()
         print("Stopping cluster.")
         self.for_all_daemons(self.stop_daemon)
@@ -1323,7 +1478,7 @@ class ClusterControl:
         self.modify_placement_info()
         self.cluster_status()
 
-    def wipe_restart(self):
+    def wipe_restart_cmd_impl(self):
         num_servers_map = self.get_number_of_servers_map()
         self.set_master_addresses()
         self.destroy()
@@ -1333,7 +1488,7 @@ class ClusterControl:
         self.modify_placement_info()
         self.cluster_status()
 
-    def add_node(self):
+    def add_node_cmd_impl(self):
         print("Adding node.")
         self.set_master_addresses(running_only=True)
         num_servers = self.get_number_of_servers(self.options.node_type)
@@ -1347,7 +1502,7 @@ class ClusterControl:
         self.change_config_if_master(daemon_id, "ADD_SERVER")
         self.show_node_status(daemon_id.index)
 
-    def remove_node(self):
+    def remove_node_cmd_impl(self):
         print("Stopping node {}-{}.".format(self.options.node_type, self.args.node_id))
         # Note: remove_node in its current implementation just stops a node and does not
         # decommission it. To properly decommission a local "node", we'll need
@@ -1356,7 +1511,7 @@ class ClusterControl:
         logging.info("Stopping server {}".format(daemon_id))
         self.stop_daemon(daemon_id)
 
-    def start_node(self):
+    def start_node_cmd_impl(self):
         print("Starting node {}-{}.".format(self.options.node_type, self.args.node_id))
         daemon_id = DaemonId(self.options.node_type, self.args.node_id)
         self.set_master_addresses()
@@ -1364,10 +1519,10 @@ class ClusterControl:
         self.wait_for_cluster_or_raise()
         self.show_node_status(daemon_id.index)
 
-    def stop_node(self):
-        self.remove_node()
+    def stop_node_cmd_impl(self):
+        self.remove_node_cmd_impl()
 
-    def restart_node(self):
+    def restart_node_cmd_impl(self):
         print("Stopping node {}-{}.".format(self.options.node_type, self.args.node_id))
         daemon_id = DaemonId(self.options.node_type, self.args.node_id)
         self.stop_daemon(daemon_id)
@@ -1378,7 +1533,7 @@ class ClusterControl:
         self.start_daemon(daemon_id)
         self.wait_for_cluster_or_raise()
 
-    def status(self):
+    def status_cmd_impl(self):
         if not os.path.isdir(self.options.cluster_base_dir):
             print("No cluster data found at: '{}'".format(self.options.cluster_base_dir))
             return
@@ -1389,8 +1544,8 @@ class ClusterControl:
         for index in range(1, max_nodes + 1):
             self.show_node_status(index, server_counts)
 
-    def setup_redis(self):
-        print("Setting up YugaByte support for Redis API.")
+    def setup_redis_cmd_impl(self):
+        print("Setting up YugaByte DB support for Redis API.")
         yb_admin_binary_path = self.options.get_binary_path("yb-admin")
         self.set_master_addresses()
         self.wait_for_cluster_or_raise()
@@ -1409,11 +1564,9 @@ class ClusterControl:
         print("Setup Redis successful.")
 
     def run_cluster_wide_ysql_initdb(self):
-        print("Initializing cluster. This may take up to a minute.")
         initdb_binary_path = self.options.get_binary_path("initdb")
 
-        logging.info("Running initdb to initialize YSQL metadata in the YugaByte cluster. "
-                     "This may take up to a minute.")
+        logging.info("Running initdb to initialize YSQL metadata in the YugaByte DB cluster.")
         with SetAndRestoreEnv(
             {'FLAGS_pggate_master_addresses': self.options.master_addresses,
              'YB_ENABLED_IN_POSTGRES': '1'}):
@@ -1474,7 +1627,10 @@ class ClusterControl:
                 self.args,
                 fallback_installation_dir=self.cluster_config.get("installation_dir"))
 
-        self.args.func()
+        if hasattr(self.args, 'func'):
+            self.args.func()
+        else:
+            self.parser.print_help()
 
     def cleanup(self, keep_log_file_and_dump_to_stderr=False):
         # Never created a temp log file to begin with.
@@ -1486,7 +1642,10 @@ class ClusterControl:
             # If we called the atexit handler and we have a file, it means we must have had errors.
             if keep_log_file_and_dump_to_stderr:
                 with open(self.log_file, "rb") as log:
-                    shutil.copyfileobj(log, sys.stderr)
+                    if sys.version_info[0] >= 3:
+                        shutil.copyfileobj(log, sys.stderr.buffer)
+                    else:
+                        shutil.copyfileobj(log, sys.stderr)
                 print("^^^ Encountered errors ^^^")
             # Whichever cleanup comes first should remove the file.
             # TODO: Maybe keep the log file around and allow the user to upload a gist with the log.
@@ -1498,6 +1657,6 @@ if __name__ == "__main__":
         control = ClusterControl()
         control.run()
         control.cleanup()
-    except ExitWithError, ex:
+    except ExitWithError as ex:
         logging.error(ex)
         sys.exit(1)
