@@ -977,7 +977,7 @@ class ClusterControl:
                     logging.info(
                             "Data dirs of the running process with daemon id %s: %s",
                             daemon_id, data_dirs_of_process)
-                data_dirs_of_process = remove_surrounding_quotes(data_dirs_of_process):
+                data_dirs_of_process = remove_surrounding_quotes(data_dirs_of_process)
                 if data_dirs_of_process != expected_data_dirs:
                     error_msg = (
                         "When looking for process with daemon id %s, we found the following "
