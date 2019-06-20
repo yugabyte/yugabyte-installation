@@ -1245,11 +1245,11 @@ class ClusterControl:
                              self.options.master_addresses,
                              "list_all_tablet_servers"]
 
-        max_num_tservers = self.get_number_of_servers(DAEMON_TYPE_TSERVER)
         num_alive_ts = None
         num_yb_admin_ts = None
 
         def call_check_for_ts(should_get_error):
+            max_num_tservers = self.get_number_of_servers(DAEMON_TYPE_TSERVER)
             num_alive_ts = sum([self.get_pid(DaemonId(DAEMON_TYPE_TSERVER, i)) is not None
                                 for i in range(1, max_num_tservers + 1)])
             # TODO: enhance this to tell us live vs dead.
