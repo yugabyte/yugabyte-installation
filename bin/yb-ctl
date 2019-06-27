@@ -90,6 +90,22 @@ DAEMON_TYPES = [
     DAEMON_TYPE_TSERVER
 ]
 
+YCQL_DEFAULT_PORT = 9042
+YSQL_DEFAULT_PORT = 5433
+
+TSERVER_DEFAULT_PORTS = {
+    "http": 9000,
+    "rpc": 9100,
+    "yedis_http": 11000,
+    "yedis_protocol": 6379,
+    "ycql_http": 12000,
+    "ycql_protocol": YCQL_DEFAULT_PORT,
+    # TODO: add ysql_http when we have it.
+    "ysql_protocol": YSQL_DEFAULT_PORT
+}
+
+LOCALHOST_IP = '127.0.0.1'
+
 SLEEP_TIME_IN_SEC = 1
 MAX_WAIT_SECONDS = 45
 DEFAULT_REPLICATION_FACTOR = 1
@@ -509,16 +525,7 @@ class ClusterOptions:
                     "http": 7000,
                     "rpc": 7100
                 },
-                DAEMON_TYPE_TSERVER: {
-                    "http": 9000,
-                    "rpc": 9100,
-                    "yedis_http": 11000,
-                    "yedis_rpc": 6379,
-                    "ycql_http": 12000,
-                    "ycql_rpc": 9042,
-                    # TODO: add ysql_http when we have it.
-                    "ysql_rpc": 5433
-                }
+                DAEMON_TYPE_TSERVER: TSERVER_DEFAULT_PORTS
         }
 
         self.master_flags = []
@@ -533,6 +540,7 @@ class ClusterOptions:
         self.enable_ysql = None
         self.install_if_needed = False
         self.yb_ctl_verbose = False
+        self.cluster_config = None
 
     def parse_flag_args(self, flag_args):
         flags = [] if flag_args is None else flag_args.split(",")
@@ -617,6 +625,10 @@ class ClusterOptions:
         if hasattr(args, "master") and args.master:
             self.node_type = DAEMON_TYPE_MASTER
 
+        # -----------------------------------------------------------------------------------------
+        # Controlling whether to enable or disable YSQL
+        # -----------------------------------------------------------------------------------------
+
         ysql_explicitly_enabled = False
         ysql_explicitly_disabled = False
 
@@ -639,6 +651,28 @@ class ClusterOptions:
 
         if self.enable_ysql is None:
             self.enable_ysql = True
+
+        # -----------------------------------------------------------------------------------------
+        # Client protocol ports
+        # -----------------------------------------------------------------------------------------
+
+        self.ysql_port = None
+        self.ycql_port = None
+        self.yedis_port = None
+        for api_name_str in ['ysql', 'ycql', 'yedis']:
+            port_option_str = api_name_str + '_port'
+            logging.info("PORT OPTION STR: %s", port_option_str)
+            port = getattr(args, port_option_str, None)
+            if port is not None:
+                if port < 1 or port > 65535:
+                    raise ExitWithError("Invalid port specified for option --%s: %d" % (
+                        port_option_str, port))
+                logging.info("FOUND PORT: %s %s", port_option_str, port)
+                setattr(self, api_name_str + '_port', port)
+
+        # -----------------------------------------------------------------------------------------
+        # Automatic YugaByte DB installation
+        # -----------------------------------------------------------------------------------------
 
         if args.install_if_needed and not self.installation_dir:
             installer = Installer()
@@ -699,6 +733,45 @@ class ClusterOptions:
         base_local_url = daemon_id.get_ip_address()
         return port_str if not include_base_url else "{}:{}".format(base_local_url, port_str)
 
+    def get_client_protocol_port(self, api_name_str):
+        attr_name = api_name_str + '_port'
+        attr_value = getattr(self, attr_name)
+        if attr_value is not None:
+            return attr_value
+        attr_value = self.cluster_config.get(attr_name)
+        if attr_value is not None:
+            return attr_value
+        return TSERVER_DEFAULT_PORTS[api_name_str + '_protocol']
+
+    def set_cluster_config(self, cluster_config):
+        self.cluster_config = cluster_config
+
+    def get_ysql_port(self):
+        return self.get_client_protocol_port('ysql')
+
+    def get_ycql_port(self):
+        return self.get_client_protocol_port('ycql')
+
+    def get_yedis_port(self):
+        return self.get_client_protocol_port('yedis')
+
+    def get_client_tool_path(self, client_tool_name):
+        tool_abs_path = os.path.abspath(
+                os.path.join(self.installation_dir, 'bin', client_tool_name))
+        cur_dir_abs_path = os.path.abspath(os.getcwd())
+        home_dir_abs_path = os.path.abspath(os.path.expanduser('~'))
+        path_rel_to_cur = os.path.relpath(tool_abs_path, cur_dir_abs_path)
+        path_rel_to_home = '~/' + os.path.relpath(tool_abs_path, home_dir_abs_path)
+        candidates = [tool_abs_path, path_rel_to_cur, path_rel_to_home]
+        min_len = None
+        for i in range(len(candidates)):
+            cur_len = len(candidates[i])
+            if min_len is None or cur_len < min_len:
+                min_len = cur_len
+                shortest_path = candidates[i]
+        return shortest_path
+
+
 # End of ClusterOptions
 # -------------------------------------------------------------------------------------------------
 
@@ -746,7 +819,7 @@ class ClusterControl:
             # No configuration file -- let's create an empty one.
             self.cluster_config = {}
 
-        loaded_cluster_config = json.loads(json.dumps(self.cluster_config))
+        loaded_cluster_config = json.loads(json.dumps(self.cluster_config, sort_keys=True))
         if 'enable_postgres' in self.cluster_config:
             # Migrate the deprecated "enable_postgres" cluster config option to the new format.
             self.cluster_config['enable_ysql'] = (
@@ -755,6 +828,7 @@ class ClusterControl:
             del self.cluster_config['enable_postgres']
         if self.cluster_config != loaded_cluster_config:
             self.save_cluster_config()
+        self.options.set_cluster_config(self.cluster_config)
 
     def save_cluster_config(self):
         cluster_config_path = self.get_cluster_config_file_path()
@@ -889,6 +963,24 @@ class ClusterControl:
                                          action='store_true',
                                          help="Disable YugaByte SQL API.",
                                          default=None)
+
+            subparsers[cmd].add_argument(
+                    "--ysql_port",
+                    help="YSQL (PostgreSQL-compatible) API port. Default: %d." %
+                         TSERVER_DEFAULT_PORTS['ysql_protocol'],
+                    type=int)
+
+            subparsers[cmd].add_argument(
+                    "--ycql_port",
+                    help="YCQL (Cassandra-compatible) API port. Default: %d." %
+                         TSERVER_DEFAULT_PORTS['ycql_protocol'],
+                    type=int)
+
+            subparsers[cmd].add_argument(
+                    "--yedis_port",
+                    help="YEDIS (Redis-compatible) API port. Default. %d." %
+                         TSERVER_DEFAULT_PORTS['yedis_protocol'],
+                    type=int)
 
             subparsers[cmd].add_argument(
                 "--num_drives", default=1, type=int,
@@ -1065,12 +1157,18 @@ class ClusterControl:
 
     def get_tserver_only_flags(self, daemon_id):
         daemon_ip_address_str = str(daemon_id.get_ip_address())
+
+        def get_host_port(api_name_str):
+            return '%s:%s' % (
+                daemon_ip_address_str,
+                self.options.get_client_protocol_port(api_name_str))
+
         command_list = [
             "--tserver_master_addrs={}".format(self.options.master_addresses),
             "--memory_limit_hard_bytes={}".format(1024 * 1024 * 1024),
             "--yb_num_shards_per_tserver={}".format(self.options.num_shards_per_tserver),
-            "--redis_proxy_bind_address=" + daemon_ip_address_str,
-            "--cql_proxy_bind_address=" + daemon_ip_address_str,
+            "--redis_proxy_bind_address=" + get_host_port('yedis'),
+            "--cql_proxy_bind_address=" + get_host_port('ycql'),
             "--local_ip_for_outbound_sockets=" + daemon_ip_address_str,
             # TODO ENG-2876: Enable this in master as well.
             "--use_cassandra_authentication={}".format(
@@ -1079,7 +1177,7 @@ class ClusterControl:
         if self.is_ysql_enabled():
             command_list += [
                 "--start_pgsql_proxy",
-                "--pgsql_proxy_bind_address=" + daemon_ip_address_str
+                "--pgsql_proxy_bind_address=" + get_host_port('ysql')
             ]
         return self.customize_flags(command_list, self.options.tserver_flags)
 
@@ -1331,20 +1429,50 @@ class ClusterControl:
         info_kv_list = []
         if not tserver_daemon_id:
             return info_kv_list
+
+        tserver_ip_address = tserver_daemon_id.get_ip_address()
+
+        # -----------------------------------------------------------------------------------------
+        # ysqlsh command line
+        # -----------------------------------------------------------------------------------------
+
         if self.is_ysql_enabled():
-            ysql_port = self.options.base_ports[tserver_daemon_id.daemon_type]["ysql_rpc"]
+            ysql_port = self.options.get_ysql_port()
+            ysqlsh_cmd_line = self.options.get_client_tool_path('ysqlsh')
+            if tserver_ip_address != LOCALHOST_IP:
+                ysqlsh_cmd_line += ' -h %s' % tserver_ip_address
+            if ysql_port != YSQL_DEFAULT_PORT:
+                ysqlsh_cmd_line += ' -p %s' % ysql_port
             info_kv_list.extend([
                 ("JDBC", "postgresql://postgres@{}:{}".format(
-                    tserver_daemon_id.get_ip_address(), ysql_port)),
-                ("YSQL Shell", "./bin/ysqlsh")
+                    tserver_ip_address, ysql_port)),
+                ("YSQL Shell", ysqlsh_cmd_line)
             ])
+
+        # -----------------------------------------------------------------------------------------
+        # cqlsh command line
+        # -----------------------------------------------------------------------------------------
+
+        ycql_port = self.options.get_ycql_port()
+        cqlsh_cmd_line = self.options.get_client_tool_path('cqlsh')
+        if tserver_ip_address != LOCALHOST_IP or ycql_port != YCQL_DEFAULT_PORT:
+            cqlsh_cmd_line += ' %s' % tserver_ip_address
+            if ycql_port != YCQL_DEFAULT_PORT:
+                cqlsh_cmd_line += ' %s' % ycql_port
+
         info_kv_list.append(
-            ("YCQL Shell", "./bin/cqlsh"))
+            ("YCQL Shell", cqlsh_cmd_line))
+
+        # -----------------------------------------------------------------------------------------
+        # redis-cli command line
+        # -----------------------------------------------------------------------------------------
+
         # TODO: should probably not even display this if we can know it's not there...
-        yedis_port = self.options.base_ports[tserver_daemon_id.daemon_type]["yedis_rpc"]
-        info_kv_list.append(
-            ("YEDIS Shell", "./bin/redis-cli -h {} -p {}".format(
-                tserver_daemon_id.get_ip_address(), yedis_port)))
+        yedis_port = self.options.get_yedis_port()
+        redis_cli_cmd_line = "{} -h {} -p {}".format(
+                self.options.get_client_tool_path('redis-cli'),
+                tserver_daemon_id.get_ip_address(), yedis_port)
+        info_kv_list.append(("YEDIS Shell", redis_cli_cmd_line))
         return info_kv_list
 
     def show_node_status(self, daemon_index, server_counts=None):
@@ -1402,11 +1530,20 @@ class ClusterControl:
         self.creating_cluster = True
         server_counts = self.options.replication_factor
         self.set_master_addresses()
-        self.cluster_config = {
-            "enable_ysql": self.options.enable_ysql,
-            "num_drives": self.options.num_drives,
-            "replication_factor": self.options.replication_factor
-        }
+        self.cluster_config = {}
+        self.options.set_cluster_config(self.cluster_config)
+
+        for attr_name in (
+            "enable_ysql",
+            "num_drives",
+            "replication_factor",
+            "ysql_port",
+            "ycql_port",
+            "yedis_port",
+        ):
+            attr_value = getattr(self.options, attr_name)
+            if attr_value is not None:
+                self.cluster_config[attr_name] = attr_value
 
         server_counts_map = {
             DAEMON_TYPE_MASTER: server_counts,
