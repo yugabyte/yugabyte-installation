@@ -84,26 +84,24 @@ import urllib
 
 DAEMON_TYPE_MASTER = 'master'
 DAEMON_TYPE_TSERVER = 'tserver'
+PROTOCOL_TYPE_YSQL = 'ysql'
+PROTOCOL_TYPE_YCQL = 'ycql'
+PROTOCOL_TYPE_YEDIS = 'yedis'
 
 DAEMON_TYPES = [
     DAEMON_TYPE_MASTER,
     DAEMON_TYPE_TSERVER
 ]
 
+PROTOCOL_TYPES = {
+    PROTOCOL_TYPE_YSQL,
+    PROTOCOL_TYPE_YCQL,
+    PROTOCOL_TYPE_YEDIS
+}
+
 YSQL_DEFAULT_PORT = 5433
 YCQL_DEFAULT_PORT = 9042
 YEDIS_DEFAULT_PORT = 6379
-
-TSERVER_DEFAULT_PORTS = {
-    "http": 9000,
-    "rpc": 9100,
-    "ysql_http": 13000,
-    "ysql_protocol": YSQL_DEFAULT_PORT,
-    "ycql_http": 12000,
-    "ycql_protocol": YCQL_DEFAULT_PORT,
-    "yedis_http": 11000,
-    "yedis_protocol": YEDIS_DEFAULT_PORT,
-}
 
 LOCALHOST_IP = '127.0.0.1'
 
@@ -513,6 +511,31 @@ class DaemonId:
         return self.daemon_type in [DAEMON_TYPE_MASTER, DAEMON_TYPE_TSERVER]
 
 
+def get_default_base_ports_dict():
+    return {
+        DAEMON_TYPE_MASTER: {
+            "http": 7000,
+            "rpc": 7100
+        },
+        DAEMON_TYPE_TSERVER: {
+            "http": 9000,
+            "rpc": 9100,
+        },
+        PROTOCOL_TYPE_YSQL: {
+            "http": 13000,
+            "rpc": YSQL_DEFAULT_PORT
+        },
+        PROTOCOL_TYPE_YCQL: {
+            "http": 12000,
+            "rpc": YCQL_DEFAULT_PORT,
+        },
+        PROTOCOL_TYPE_YEDIS: {
+            "http": 11000,
+            "rpc": YEDIS_DEFAULT_PORT
+        }
+    }
+
+
 class ClusterOptions:
     def __init__(self):
         self.max_daemon_index = 20
@@ -531,13 +554,7 @@ class ClusterOptions:
         self.placement_zone = "zone"
 
         self.master_addresses = ""
-        self.base_ports = {
-                DAEMON_TYPE_MASTER: {
-                    "http": 7000,
-                    "rpc": 7100
-                },
-                DAEMON_TYPE_TSERVER: TSERVER_DEFAULT_PORTS
-        }
+        self.base_ports = get_default_base_ports_dict()
 
         self.master_flags = []
         self.tserver_flags = []
@@ -557,9 +574,6 @@ class ClusterOptions:
         self.enable_ysql = None
         self.num_drives = None
         self.replication_factor = DEFAULT_REPLICATION_FACTOR
-        self.ysql_port = None
-        self.ycql_port = None
-        self.yedis_port = None
 
     def parse_flag_args(self, flag_args):
         flags = [] if flag_args is None else flag_args.split(",")
@@ -675,17 +689,14 @@ class ClusterOptions:
         # Client protocol ports
         # -----------------------------------------------------------------------------------------
 
-        self.ysql_port = None
-        self.ycql_port = None
-        self.yedis_port = None
-        for api_name_str in ['ysql', 'ycql', 'yedis']:
-            port_option_str = api_name_str + '_port'
+        for protocol_type in PROTOCOL_TYPES:
+            port_option_str = protocol_type + '_port'
             port = getattr(args, port_option_str, None)
             if port is not None:
                 if port < 1 or port > 65535:
                     raise ExitWithError("Invalid port specified for option --%s: %d" % (
                         port_option_str, port))
-                setattr(self, api_name_str + '_port', port)
+                self.base_ports[protocol_type]['rpc'] = port
 
         # -----------------------------------------------------------------------------------------
         # Automatic YugaByte DB installation
@@ -753,15 +764,11 @@ class ClusterOptions:
             port_str = str(self.base_ports[daemon_id.daemon_type][port_type])
         return "{}:{}".format(base_local_url, port_str)
 
-    def get_client_protocol_port(self, api_name_str):
-        attr_name = api_name_str + '_port'
-        attr_value = getattr(self, attr_name)
+    def get_client_protocol_port(self, protocol_type):
+        attr_value = self.cluster_config.get(protocol_type + '_port')
         if attr_value is not None:
             return attr_value
-        attr_value = self.cluster_config.get(attr_name)
-        if attr_value is not None:
-            return attr_value
-        return TSERVER_DEFAULT_PORTS[api_name_str + '_protocol']
+        return self.base_ports[protocol_type]['rpc']
 
     def set_cluster_config(self, cluster_config):
         self.cluster_config = cluster_config
@@ -986,20 +993,17 @@ class ClusterControl:
 
             subparsers[cmd].add_argument(
                     "--ysql_port",
-                    help="YSQL (PostgreSQL-compatible) API port. Default: %d." %
-                         TSERVER_DEFAULT_PORTS['ysql_protocol'],
+                    help="YSQL (PostgreSQL-compatible) API port. Default: %d." % YSQL_DEFAULT_PORT,
                     type=int)
 
             subparsers[cmd].add_argument(
                     "--ycql_port",
-                    help="YCQL (Cassandra-compatible) API port. Default: %d." %
-                         TSERVER_DEFAULT_PORTS['ycql_protocol'],
+                    help="YCQL (Cassandra-compatible) API port. Default: %d." % YCQL_DEFAULT_PORT,
                     type=int)
 
             subparsers[cmd].add_argument(
                     "--yedis_port",
-                    help="YEDIS (Redis-compatible) API port. Default. %d." %
-                         TSERVER_DEFAULT_PORTS['yedis_protocol'],
+                    help="YEDIS (Redis-compatible) API port. Default. %d." % YEDIS_DEFAULT_PORT,
                     type=int)
 
             subparsers[cmd].add_argument(
@@ -1549,14 +1553,14 @@ class ClusterControl:
         for attr_name in (
             "enable_ysql",
             "num_drives",
-            "replication_factor",
-            "ysql_port",
-            "ycql_port",
-            "yedis_port",
+            "replication_factor"
         ):
             attr_value = getattr(self.options, attr_name)
             if attr_value is not None:
                 self.cluster_config[attr_name] = attr_value
+        for protocol_type in PROTOCOL_TYPES:
+            port = self.options.base_ports[protocol_type]['rpc']
+            self.cluster_config[protocol_type + '_port'] = port
 
         server_counts_map = {
             DAEMON_TYPE_MASTER: server_counts,
