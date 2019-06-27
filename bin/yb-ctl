@@ -90,18 +90,19 @@ DAEMON_TYPES = [
     DAEMON_TYPE_TSERVER
 ]
 
-YCQL_DEFAULT_PORT = 9042
 YSQL_DEFAULT_PORT = 5433
+YCQL_DEFAULT_PORT = 9042
+YEDIS_DEFAULT_PORT = 6379
 
 TSERVER_DEFAULT_PORTS = {
     "http": 9000,
     "rpc": 9100,
-    "yedis_http": 11000,
-    "yedis_protocol": 6379,
+    "ysql_http": 13000,
+    "ysql_protocol": YSQL_DEFAULT_PORT,
     "ycql_http": 12000,
     "ycql_protocol": YCQL_DEFAULT_PORT,
-    # TODO: add ysql_http when we have it.
-    "ysql_protocol": YSQL_DEFAULT_PORT
+    "yedis_http": 11000,
+    "yedis_protocol": YEDIS_DEFAULT_PORT,
 }
 
 LOCALHOST_IP = '127.0.0.1'
@@ -188,6 +189,18 @@ def wait_for_proc_report_progress(proc):
 def is_env_var_true(env_var_name):
     env_var_value = os.getenv(env_var_name)
     return env_var_value and env_var_value.strip().lower() not in ['n', 'no', '0', 'f', 'false']
+
+
+def format_cmd_line_with_host_port(executable, host, port, default_port):
+    """
+    Adds -h host -p port options if necessary. This works for ysqlsh (psql) and redis-cli.
+    """
+    cmd_line = str(executable)
+    if host != LOCALHOST_IP:
+        cmd_line += ' -h %s' % host
+    if port != default_port:
+        cmd_line += ' -p %d' % port
+    return cmd_line
 
 
 DISABLE_CALLHOME_ENV_VAR_SET = is_env_var_true('YB_DISABLE_CALLHOME')
@@ -504,7 +517,6 @@ class ClusterOptions:
     def __init__(self):
         self.max_daemon_index = 20
         self.num_shards_per_tserver = None
-        self.replication_factor = DEFAULT_REPLICATION_FACTOR
         self.timeout = None
 
         self.cluster_base_dir = None
@@ -514,7 +526,6 @@ class ClusterOptions:
 
         self.installation_dir = None
 
-        self.num_drives = None
         self.placement_cloud = "cloud"
         self.placement_region = "region"
         self.placement_zone = "zone"
@@ -537,10 +548,18 @@ class ClusterOptions:
         self.node_type = DAEMON_TYPE_TSERVER
         self.is_shell_master = False
         self.is_startup_command = False
-        self.enable_ysql = None
         self.install_if_needed = False
         self.yb_ctl_verbose = False
+
         self.cluster_config = None
+
+        # These fields are saved into the cluster configuration.
+        self.enable_ysql = None
+        self.num_drives = None
+        self.replication_factor = DEFAULT_REPLICATION_FACTOR
+        self.ysql_port = None
+        self.ycql_port = None
+        self.yedis_port = None
 
     def parse_flag_args(self, flag_args):
         flags = [] if flag_args is None else flag_args.split(",")
@@ -661,13 +680,11 @@ class ClusterOptions:
         self.yedis_port = None
         for api_name_str in ['ysql', 'ycql', 'yedis']:
             port_option_str = api_name_str + '_port'
-            logging.info("PORT OPTION STR: %s", port_option_str)
             port = getattr(args, port_option_str, None)
             if port is not None:
                 if port < 1 or port > 65535:
                     raise ExitWithError("Invalid port specified for option --%s: %d" % (
                         port_option_str, port))
-                logging.info("FOUND PORT: %s %s", port_option_str, port)
                 setattr(self, api_name_str + '_port', port)
 
         # -----------------------------------------------------------------------------------------
@@ -728,10 +745,13 @@ class ClusterOptions:
         raise RuntimeError("No binary found for {}. Considered binary directories: {}".format(
             binary_name, binary_dirs))
 
-    def get_address(self, daemon_id, port_type, include_base_url=False):
-        port_str = str(self.base_ports[daemon_id.daemon_type][port_type])
+    def get_host_port(self, daemon_id, port_type):
         base_local_url = daemon_id.get_ip_address()
-        return port_str if not include_base_url else "{}:{}".format(base_local_url, port_str)
+        if port_type.endswith('_protocol'):
+            port_str = str(self.get_client_protocol_port(port_type.split('_')[0]))
+        else:
+            port_str = str(self.base_ports[daemon_id.daemon_type][port_type])
+        return "{}:{}".format(base_local_url, port_str)
 
     def get_client_protocol_port(self, api_name_str):
         attr_name = api_name_str + '_port'
@@ -1156,20 +1176,15 @@ class ClusterControl:
         return self.customize_flags(command_list, self.options.master_flags)
 
     def get_tserver_only_flags(self, daemon_id):
-        daemon_ip_address_str = str(daemon_id.get_ip_address())
-
-        def get_host_port(api_name_str):
-            return '%s:%s' % (
-                daemon_ip_address_str,
-                self.options.get_client_protocol_port(api_name_str))
-
+        def get_host_port(port_type):
+            return self.options.get_host_port(daemon_id, port_type)
         command_list = [
             "--tserver_master_addrs={}".format(self.options.master_addresses),
             "--memory_limit_hard_bytes={}".format(1024 * 1024 * 1024),
             "--yb_num_shards_per_tserver={}".format(self.options.num_shards_per_tserver),
-            "--redis_proxy_bind_address=" + get_host_port('yedis'),
-            "--cql_proxy_bind_address=" + get_host_port('ycql'),
-            "--local_ip_for_outbound_sockets=" + daemon_ip_address_str,
+            "--redis_proxy_bind_address=" + get_host_port('yedis_protocol'),
+            "--cql_proxy_bind_address=" + get_host_port('ycql_protocol'),
+            "--local_ip_for_outbound_sockets=" + daemon_id.get_ip_address(),
             # TODO ENG-2876: Enable this in master as well.
             "--use_cassandra_authentication={}".format(
                 str(self.options.use_cassandra_authentication).lower())
@@ -1177,7 +1192,7 @@ class ClusterControl:
         if self.is_ysql_enabled():
             command_list += [
                 "--start_pgsql_proxy",
-                "--pgsql_proxy_bind_address=" + get_host_port('ysql')
+                "--pgsql_proxy_bind_address=" + get_host_port('ysql_protocol')
             ]
         return self.customize_flags(command_list, self.options.tserver_flags)
 
@@ -1194,7 +1209,7 @@ class ClusterControl:
         """
         num_servers = self.get_number_of_servers(DAEMON_TYPE_MASTER)
         self.options.master_addresses = ",".join(
-            [self.options.get_address(DaemonId(DAEMON_TYPE_MASTER, i), "rpc", include_base_url=True)
+            [self.options.get_host_port(DaemonId(DAEMON_TYPE_MASTER, i), "rpc")
              for i in range(1, num_servers + 1)
              if not running_only or self.get_pid(DaemonId(DAEMON_TYPE_MASTER, i)) is not None])
 
@@ -1368,8 +1383,8 @@ class ClusterControl:
                 # aware of it because we do not have a yb-admin API to return only live tablet
                 # servers.
                 for i in range(num_alive_ts):
-                    ts_hp = self.options.get_address(
-                        DaemonId(DAEMON_TYPE_TSERVER, i + 1), "rpc", include_base_url=True)
+                    ts_hp = self.options.get_host_port(
+                        DaemonId(DAEMON_TYPE_TSERVER, i + 1), "rpc")
                     if ts_hp not in output:
                         logging.error("Could not find TS info ('{}') in yb-admin output: {}".format(
                             ts_hp, output))
@@ -1412,8 +1427,7 @@ class ClusterControl:
         info_kv_list.extend([
             # TODO: this might cause issues if the first master is down...
             ("Web UI", "http://{}/".format(
-                self.options.get_address(
-                    DaemonId(DAEMON_TYPE_MASTER, 1), "http", include_base_url=True))),
+                self.options.get_host_port(DaemonId(DAEMON_TYPE_MASTER, 1), "http"))),
             ("Cluster Data", self.options.cluster_base_dir)
         ])
         self.print_status_box(title, info_kv_list)
@@ -1438,11 +1452,10 @@ class ClusterControl:
 
         if self.is_ysql_enabled():
             ysql_port = self.options.get_ysql_port()
-            ysqlsh_cmd_line = self.options.get_client_tool_path('ysqlsh')
-            if tserver_ip_address != LOCALHOST_IP:
-                ysqlsh_cmd_line += ' -h %s' % tserver_ip_address
-            if ysql_port != YSQL_DEFAULT_PORT:
-                ysqlsh_cmd_line += ' -p %s' % ysql_port
+            ysqlsh_cmd_line = format_cmd_line_with_host_port(
+                self.options.get_client_tool_path('ysqlsh'), tserver_ip_address, ysql_port,
+                YSQL_DEFAULT_PORT)
+
             info_kv_list.extend([
                 ("JDBC", "postgresql://postgres@{}:{}".format(
                     tserver_ip_address, ysql_port)),
@@ -1469,9 +1482,9 @@ class ClusterControl:
 
         # TODO: should probably not even display this if we can know it's not there...
         yedis_port = self.options.get_yedis_port()
-        redis_cli_cmd_line = "{} -h {} -p {}".format(
-                self.options.get_client_tool_path('redis-cli'),
-                tserver_daemon_id.get_ip_address(), yedis_port)
+        redis_cli_cmd_line = format_cmd_line_with_host_port(
+            self.options.get_client_tool_path('redis-cli'), tserver_ip_address, yedis_port,
+            YEDIS_DEFAULT_PORT)
         info_kv_list.append(("YEDIS Shell", redis_cli_cmd_line))
         return info_kv_list
 
@@ -1618,12 +1631,8 @@ class ClusterControl:
     def wipe_restart_cmd_impl(self):
         num_servers_map = self.get_number_of_servers_map()
         self.set_master_addresses()
-        self.destroy()
-        print("Starting cluster.")
-        self.start_helper(num_servers_map)
-        self.wait_for_cluster_or_raise()
-        self.modify_placement_info()
-        self.cluster_status()
+        self.destroy_cmd_impl()
+        self.create_cmd_impl()
 
     def add_node_cmd_impl(self):
         print("Adding node.")
