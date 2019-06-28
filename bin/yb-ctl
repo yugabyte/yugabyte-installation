@@ -769,8 +769,9 @@ class ClusterOptions:
 
     def set_cluster_config(self, cluster_config):
         self.cluster_config = cluster_config
-        if 'base_ports' in cluster_config:
-            self.base_ports = cluster_config['base_ports']
+        base_ports_from_config = cluster_config.get('ports')
+        if base_ports_from_config is not None:
+            self.base_ports = base_ports_from_config
 
     def get_client_tool_path(self, client_tool_name):
         tool_abs_path = os.path.abspath(

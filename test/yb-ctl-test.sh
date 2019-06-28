@@ -73,6 +73,7 @@ start_cluster_run_tests() {
   ( set -x;  "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" add_node )
   verify_ysqlsh
   ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop_node 1 )
+
   # It looks like if we try to create a table in this state, the master is trying to assign
   # tablets to node 1, which is down, and times out:
   #
@@ -251,24 +252,25 @@ verify_ysqlsh
 start_cluster_run_tests "bin"
 
 log_heading "Testing YSQL port override"
+custom_ysql_port=54320
 (
   set -x
-  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" create --ysql_port 54320
+  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" create --ysql_port "$custom_ysql_port"
 )
-  verify_ysqlsh 1 54320
+verify_ysqlsh 1 "$custom_ysql_port"
 (
   set -x
-  "$python_interpreter" bin/yb-ctl stop "${yb_ctl_args[@]}"
+  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" stop
 )
 log "Checking that the custom YSQL port persists across restarts"
 (
   set -x
-  "$python_interpreter" bin/yb-ctl start "${yb_ctl_args[@]}"
+  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" start
 )
-verify_ysqlsh 1 54320
+verify_ysqlsh 1 "$custom_ysql_port"
 (
   set -x
-  "$python_interpreter" bin/yb-ctl destroy "${yb_ctl_args[@]}"
+  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" destroy
 )
 
 # -------------------------------------------------------------------------------------------------
@@ -290,13 +292,16 @@ yb_build_root=$yb_src_root/build/latest
 if [[ $OSTYPE == linux* ]]; then
   ( set -x; time "$yb_build_root/bin/post_install.sh" )
 fi
+
 (
   set -x
   installation_dir=$yb_build_root
-  "$python_interpreter" "$submodule_bin_dir/yb-ctl" start
-  verify_ysqlsh
-  "$python_interpreter" "$submodule_bin_dir/yb-ctl" stop
-  "$python_interpreter" "$submodule_bin_dir/yb-ctl" destroy
+  "$python_interpreter" "$submodule_bin_dir/yb-ctl" "${yb_ctl_args[@]}" start
+)
+verify_ysqlsh
+(
+  "$python_interpreter" "$submodule_bin_dir/yb-ctl" "${yb_ctl_args[@]}" stop
+  "$python_interpreter" "$submodule_bin_dir/yb-ctl" "${yb_ctl_args[@]}" destroy
 )
 
 log_heading "TESTS SUCCEEDED"
