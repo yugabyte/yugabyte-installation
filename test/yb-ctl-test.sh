@@ -258,17 +258,17 @@ log_heading "Testing YSQL port override"
   verify_ysqlsh 1 54320
 (
   set -x
-  "$python_interpreter" bin/yb-ctl stop
+  "$python_interpreter" bin/yb-ctl stop "${yb_ctl_args[@]}"
 )
 log "Checking that the custom YSQL port persists across restarts"
 (
   set -x
-  "$python_interpreter" bin/yb-ctl start
+  "$python_interpreter" bin/yb-ctl start "${yb_ctl_args[@]}"
 )
 verify_ysqlsh 1 54320
 (
   set -x
-  "$python_interpreter" bin/yb-ctl destroy
+  "$python_interpreter" bin/yb-ctl destroy "${yb_ctl_args[@]}"
 )
 
 # -------------------------------------------------------------------------------------------------
