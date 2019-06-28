@@ -5,7 +5,7 @@ set -euo pipefail
 export YB_PG_FALLBACK_SYSTEM_USER_NAME=$USER
 export YB_DISABLE_CALLHOME=1
 
-ysql_port=5433
+readonly YSQL_DEFAULT_PORT=5433
 ysql_ip=127.0.0.1
 
 # This will be auto-detected the first time yb-ctl auto-downloads and installs YugaByte DB.
@@ -29,6 +29,7 @@ detect_installation_dir() {
 
 verify_ysqlsh() {
   local node_number=${1:-1}
+  local ysql_port=${2:-$YSQL_DEFAULT_PORT}
 
   local ysql_ip=127.0.0.$node_number
   log "Waiting for YSQL to listen on port $ysql_ip:$ysql_port"
@@ -72,6 +73,7 @@ start_cluster_run_tests() {
   ( set -x;  "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" add_node )
   verify_ysqlsh
   ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop_node 1 )
+
   # It looks like if we try to create a table in this state, the master is trying to assign
   # tablets to node 1, which is down, and times out:
   #
@@ -249,6 +251,29 @@ verify_ysqlsh
 
 start_cluster_run_tests "bin"
 
+log_heading "Testing YSQL port override"
+custom_ysql_port=54320
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" create --ysql_port "$custom_ysql_port"
+)
+verify_ysqlsh 1 "$custom_ysql_port"
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" stop
+)
+log "Checking that the custom YSQL port persists across restarts"
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" start
+)
+verify_ysqlsh 1 "$custom_ysql_port"
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" destroy
+)
+
+# -------------------------------------------------------------------------------------------------
 log_heading "Testing putting this version of yb-ctl inside the installation directory"
 ( set -x; cp bin/yb-ctl "$installation_dir" )
 start_cluster_run_tests "$installation_dir"
@@ -267,13 +292,16 @@ yb_build_root=$yb_src_root/build/latest
 if [[ $OSTYPE == linux* ]]; then
   ( set -x; time "$yb_build_root/bin/post_install.sh" )
 fi
+
 (
   set -x
   installation_dir=$yb_build_root
-  "$python_interpreter" "$submodule_bin_dir/yb-ctl" start
-  verify_ysqlsh
-  "$python_interpreter" "$submodule_bin_dir/yb-ctl" stop
-  "$python_interpreter" "$submodule_bin_dir/yb-ctl" destroy
+  "$python_interpreter" "$submodule_bin_dir/yb-ctl" "${yb_ctl_args[@]}" start
+)
+verify_ysqlsh
+(
+  "$python_interpreter" "$submodule_bin_dir/yb-ctl" "${yb_ctl_args[@]}" stop
+  "$python_interpreter" "$submodule_bin_dir/yb-ctl" "${yb_ctl_args[@]}" destroy
 )
 
 log_heading "TESTS SUCCEEDED"
