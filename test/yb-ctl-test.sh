@@ -5,7 +5,7 @@ set -euo pipefail
 export YB_PG_FALLBACK_SYSTEM_USER_NAME=$USER
 export YB_DISABLE_CALLHOME=1
 
-ysql_port=5433
+readonly YSQL_DEFAULT_PORT=5433
 ysql_ip=127.0.0.1
 
 # This will be auto-detected the first time yb-ctl auto-downloads and installs YugaByte DB.
@@ -29,6 +29,7 @@ detect_installation_dir() {
 
 verify_ysqlsh() {
   local node_number=${1:-1}
+  local ysql_port=${2:-$YSQL_DEFAULT_PORT}
 
   local ysql_ip=127.0.0.$node_number
   log "Waiting for YSQL to listen on port $ysql_ip:$ysql_port"
@@ -249,6 +250,28 @@ verify_ysqlsh
 
 start_cluster_run_tests "bin"
 
+log_heading "Testing YSQL port override"
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" create --ysql_port 54320
+)
+  verify_ysqlsh 1 54320
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl stop
+)
+log "Checking that the custom YSQL port persists across restarts"
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl start
+)
+verify_ysqlsh 1 54320
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl destroy
+)
+
+# -------------------------------------------------------------------------------------------------
 log_heading "Testing putting this version of yb-ctl inside the installation directory"
 ( set -x; cp bin/yb-ctl "$installation_dir" )
 start_cluster_run_tests "$installation_dir"
