@@ -1297,7 +1297,7 @@ class ClusterControl:
         self.stop_daemon(daemon_id)
         self.start_daemon(daemon_id)
 
-    def start_helper(self, server_counts_map):
+    def create_sanity_check(self, server_counts_map):
         if len(self.options.placement_info) > self.get_replication_factor():
             raise RuntimeError("Number of placement info fields is larger than "
                                "the replication factor and hence the number of servers.")
@@ -1325,9 +1325,6 @@ class ClusterControl:
                 "{}".format(pids))
         if any(sum(pids.values(), [])):
             raise ExitWithError("Processes are still up. Make sure to destroy old state.")
-
-        os.makedirs(self.options.cluster_base_dir)
-        self.for_all_daemons(self.start_daemon, server_counts_map)
 
     def change_config_if_master(self, daemon_id, cmd_type):
         if daemon_id.daemon_type == DAEMON_TYPE_TSERVER:
@@ -1569,7 +1566,9 @@ class ClusterControl:
             DAEMON_TYPE_TSERVER: server_counts
         }
 
-        self.start_helper(server_counts_map)
+        self.create_sanity_check(server_counts_map)
+        os.makedirs(self.options.cluster_base_dir)
+        self.for_all_daemons(self.start_daemon, server_counts_map)
         self.wait_for_cluster_or_raise()
         self.modify_placement_info()
 
