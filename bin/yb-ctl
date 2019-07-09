@@ -1303,7 +1303,7 @@ class ClusterControl:
         self.stop_daemon(daemon_id)
         self.start_daemon(daemon_id)
 
-    def create_sanity_check(self, server_counts_map):
+    def create_sanity_check(self):
         if len(self.options.placement_info) > self.get_replication_factor():
             raise RuntimeError("Number of placement info fields is larger than "
                                "the replication factor and hence the number of servers.")
@@ -1324,7 +1324,7 @@ class ClusterControl:
                     self.options.cluster_base_dir))
 
         # Make sure that there are no `yb-` processes before the `create`.
-        pids = self.for_all_daemons(self.get_pid, server_counts_map)
+        pids = self.for_all_daemons(self.get_pid)
         if self.args.verbose:
             logging.info(
                 "PIDs found when looking for daemons before starting daemons in `create`: "
@@ -1532,7 +1532,7 @@ class ClusterControl:
         title = "Node {}: {}".format(daemon_index, ", ".join(process_list))
         self.print_status_box(title, info_kv_list)
 
-    def for_all_daemons(self, fn, server_counts_map=None):
+    def for_all_daemons(self, fn):
         """
         Run the given function for all daemons.
 
@@ -1540,11 +1540,7 @@ class ClusterControl:
         """
         fn_returns = {daemon_type: [] for daemon_type in DAEMON_TYPES}
         for daemon_type in DAEMON_TYPES:
-            if server_counts_map:
-                num_servers = server_counts_map[daemon_type]
-            else:
-                num_servers = self.get_number_of_servers(daemon_type)
-
+            num_servers = self.get_number_of_servers(daemon_type)
             for daemon_index in range(1, num_servers + 1):
                 fn_returns[daemon_type].append(fn(DaemonId(daemon_type, daemon_index)))
         return fn_returns
@@ -1567,14 +1563,9 @@ class ClusterControl:
                 self.cluster_config[attr_name] = attr_value
         self.cluster_config['ports'] = self.options.base_ports
 
-        server_counts_map = {
-            DAEMON_TYPE_MASTER: server_counts,
-            DAEMON_TYPE_TSERVER: server_counts
-        }
-
-        self.create_sanity_check(server_counts_map)
+        self.create_sanity_check()
         os.makedirs(self.options.cluster_base_dir)
-        self.for_all_daemons(self.start_daemon, server_counts_map)
+        self.for_all_daemons(self.start_daemon)
         self.wait_for_cluster_or_raise()
         self.modify_placement_info()
 
