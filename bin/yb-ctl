@@ -1175,7 +1175,6 @@ class ClusterControl:
             return self.options.get_host_port(daemon_id, port_type)
         command_list = [
             "--tserver_master_addrs={}".format(self.options.master_addresses),
-            "--memory_limit_hard_bytes={}".format(1024 * 1024 * 1024),
             "--yb_num_shards_per_tserver={}".format(self.options.num_shards_per_tserver),
             "--redis_proxy_bind_address=" + get_host_port('yedis'),
             "--cql_proxy_bind_address=" + get_host_port('ycql'),
