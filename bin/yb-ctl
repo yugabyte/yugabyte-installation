@@ -1317,6 +1317,15 @@ class ClusterControl:
                  "Use --data_dir to specify a different data directory.").format(
                     self.options.cluster_base_dir))
 
+        # Make sure that there are no `yb-` processes before the `create`.
+        pids = self.for_all_daemons(self.get_pid, server_counts_map)
+        if self.args.verbose:
+            logging.info(
+                "PIDs found when looking for daemons before starting daemons in `create`: "
+                "{}".format(pids))
+        if any(sum(pids.values(), [])):
+            raise ExitWithError("Processes are still up. Make sure to destroy old state.")
+
         os.makedirs(self.options.cluster_base_dir)
         self.for_all_daemons(self.start_daemon, server_counts_map)
 
@@ -1523,7 +1532,10 @@ class ClusterControl:
     def for_all_daemons(self, fn, server_counts_map=None):
         """
         Run the given function for all daemons.
+
+        Returns the return values of each function call.
         """
+        fn_returns = {daemon_type: [] for daemon_type in DAEMON_TYPES}
         for daemon_type in DAEMON_TYPES:
             if server_counts_map:
                 num_servers = server_counts_map[daemon_type]
@@ -1531,7 +1543,8 @@ class ClusterControl:
                 num_servers = self.get_number_of_servers(daemon_type)
 
             for daemon_index in range(1, num_servers + 1):
-                fn(DaemonId(daemon_type, daemon_index))
+                fn_returns[daemon_type].append(fn(DaemonId(daemon_type, daemon_index)))
+        return fn_returns
 
     def create_cmd_impl(self):
         print("Creating cluster.")
