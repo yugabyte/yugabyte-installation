@@ -1246,8 +1246,14 @@ class ClusterControl:
             logging.info("{} already stopped".format(name))
             return
         logging.info("Stopping {} PID={}".format(name, pid))
-        # Kill the process.
-        os.kill(pid, signal.SIGTERM)
+        # Kill the process, if it exists.
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError as e:
+            if e.errno == 3:
+                logging.info("{} does not exist; nothing to stop".format(name))
+            else:
+                raise e
 
         # Wait for process to stop.
         last_msg_time = time.time()
