@@ -1354,6 +1354,20 @@ class ClusterControl:
         alive (based on valid PID), then this function returns True. Anything else will end up
         returning False.
         """
+        # Wait for master and tserver processes to be ready.
+        def call_check_for_processes(should_get_error):
+            pids = self.for_all_daemons(self.get_pid)
+            if self.args.verbose:
+                logging.info(
+                    "PIDs found when looking for daemons after starting daemons in `create`: "
+                    "{}".format(pids))
+            return all(sum(pids.values(), []))
+
+        logging.info("Waiting for master and tserver processes to be up.")
+        if not retry_call_with_timeout(call_check_for_processes, self.options.timeout):
+            logging.error("Not all master and tserver processes are up.")
+            return False
+
         # Wait for master leader to be ready, and wait for enough tservers.
         # 'Enough' here means that the number of live tservers reported to the master should be
         # equal to the number of TS we have started -- based on directories we have on the FS.
@@ -1369,6 +1383,9 @@ class ClusterControl:
         num_yb_admin_ts = None
 
         def call_check_for_ts(should_get_error):
+            if not call_check_for_processes(should_get_error):
+                raise RuntimeError("At least one master or tserver process is down.")
+
             max_num_tservers = self.get_number_of_servers(DAEMON_TYPE_TSERVER)
             num_alive_ts = sum([self.get_pid(DaemonId(DAEMON_TYPE_TSERVER, i)) is not None
                                 for i in range(1, max_num_tservers + 1)])
@@ -1409,6 +1426,7 @@ class ClusterControl:
             logging.error("Failed waiting for {} tservers, got {}".format(
                 num_alive_ts, num_yb_admin_ts))
             return False
+
         return True
 
     def wait_for_cluster_or_raise(self):
