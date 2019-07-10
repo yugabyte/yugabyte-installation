@@ -4,3 +4,5 @@
 *.sw?
 *.bak
 *.rej
+venv/
+*.log

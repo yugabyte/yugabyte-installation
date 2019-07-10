@@ -68,9 +68,12 @@ start_cluster_run_tests() {
     fatal "One arg expected: root directory to run in"
   fi
   local root_dir=$1
-  ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" start )
+  ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" start "$create_flags" )
   verify_ysqlsh
-  ( set -x;  "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" add_node )
+  (
+    set -x
+    "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" add_node "$create_flags"
+  )
   verify_ysqlsh
   ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop_node 1 )
 
@@ -81,7 +84,10 @@ start_cluster_run_tests() {
   if false; then
     verify_ysqlsh 2
   fi
-  ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" start_node 1 )
+  (
+    set -x
+    "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" start_node 1 "$create_flags"
+  )
   verify_ysqlsh
   ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop )
   ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" destroy )
@@ -92,6 +98,8 @@ readonly yb_data_dir="/tmp/yb-ctl-test-data-$( date +%Y-%m-%dT%H_%M_%S )-$RANDOM
 yb_ctl_args=(
   --data_dir "$yb_data_dir"
 )
+
+create_flags="--tserver_flags=v=1"
 
 thick_log_heading() {
   (
@@ -237,7 +245,7 @@ trap cleanup EXIT
 log_heading "Running basic tests"
 (
   set -x
-  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" --install-if-needed create
+  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" --install-if-needed create "$create_flags"
 )
 
 detect_installation_dir
@@ -255,7 +263,8 @@ log_heading "Testing YSQL port override"
 custom_ysql_port=54320
 (
   set -x
-  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" create --ysql_port "$custom_ysql_port"
+  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" create --ysql_port "$custom_ysql_port" \
+      "$create_flags"
 )
 verify_ysqlsh 1 "$custom_ysql_port"
 (
@@ -265,7 +274,7 @@ verify_ysqlsh 1 "$custom_ysql_port"
 log "Checking that the custom YSQL port persists across restarts"
 (
   set -x
-  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" start
+  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" start "$create_flags"
 )
 verify_ysqlsh 1 "$custom_ysql_port"
 (
@@ -296,7 +305,7 @@ fi
 (
   set -x
   installation_dir=$yb_build_root
-  "$python_interpreter" "$submodule_bin_dir/yb-ctl" "${yb_ctl_args[@]}" start
+  "$python_interpreter" "$submodule_bin_dir/yb-ctl" "${yb_ctl_args[@]}" start "$create_flags"
 )
 verify_ysqlsh
 (
