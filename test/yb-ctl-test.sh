@@ -99,7 +99,7 @@ yb_ctl_args=(
   --data_dir "$yb_data_dir"
 )
 
-create_flags="--tserver_flags=v=1"
+create_flags=""
 
 thick_log_heading() {
   (
