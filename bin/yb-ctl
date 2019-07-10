@@ -1323,12 +1323,10 @@ class ClusterControl:
                  "Use --data_dir to specify a different data directory.").format(
                     self.options.cluster_base_dir))
 
-        # Make sure that there are no `yb-` processes before the `create`.
+        # Make sure that there are no master or tserver processes before the `create`.
         pids = self.for_all_daemons(self.get_pid)
         if self.args.verbose:
-            logging.info(
-                "PIDs found when looking for daemons before starting daemons in `create`: "
-                "{}".format(pids))
+            logging.info("Daemon PIDs found before starting daemons in `create`: {}".format(pids))
         if any(sum(pids.values(), [])):
             raise ExitWithError("Processes are still up. Make sure to destroy old state.")
 
@@ -1358,9 +1356,7 @@ class ClusterControl:
         def call_check_for_processes(should_get_error):
             pids = self.for_all_daemons(self.get_pid)
             if self.args.verbose:
-                logging.info(
-                    "PIDs found when looking for daemons after starting daemons in `create`: "
-                    "{}".format(pids))
+                logging.info("Daemon PIDs found after starting daemons: {}".format(pids))
             return all(sum(pids.values(), []))
 
         logging.info("Waiting for master and tserver processes to be up.")
@@ -1554,7 +1550,8 @@ class ClusterControl:
         """
         Run the given function for all daemons.
 
-        Returns the return values of each function call.
+        :returns: return values of each function call.
+        :rtype: dict
         """
         fn_returns = {daemon_type: [] for daemon_type in DAEMON_TYPES}
         for daemon_type in DAEMON_TYPES:
