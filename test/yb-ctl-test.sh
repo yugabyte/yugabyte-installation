@@ -235,6 +235,15 @@ log "OSTYPE: $OSTYPE"
 log "USER: $USER"
 log "TRAVIS: ${TRAVIS:-undefined}"
 
+if [[ ${TRAVIS:-} == "true" && $OSTYPE == darwin* ]]; then
+  sudo ifconfig lo0 alias 127.0.0.2
+  sudo ifconfig lo0 alias 127.0.0.3
+  sudo ifconfig lo0 alias 127.0.0.4
+  sudo ifconfig lo0 alias 127.0.0.5
+  sudo ifconfig lo0 alias 127.0.0.6
+  sudo ifconfig lo0 alias 127.0.0.7
+fi
+
 if [[ ${TRAVIS:-} != "true" || $OSTYPE != darwin* ]]; then
   # We don't run pycodestyle on macOS on Travis CI.
   pycodestyle --config=pycodestyle.conf bin/yb-ctl
