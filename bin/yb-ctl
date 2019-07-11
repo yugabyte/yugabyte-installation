@@ -1380,7 +1380,7 @@ class ClusterControl:
 
         def call_check_for_ts(should_get_error):
             if not call_check_for_processes(should_get_error):
-                raise RuntimeError("At least one master or tserver process is down.")
+                raise ExitWithError("At least one master or tserver process is down.")
 
             max_num_tservers = self.get_number_of_servers(DAEMON_TYPE_TSERVER)
             num_alive_ts = sum([self.get_pid(DaemonId(DAEMON_TYPE_TSERVER, i)) is not None
