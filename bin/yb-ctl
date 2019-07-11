@@ -1303,7 +1303,10 @@ class ClusterControl:
         self.stop_daemon(daemon_id)
         self.start_daemon(daemon_id)
 
-    def create_sanity_check(self):
+    def create_ready_check(self):
+        """
+        Before moving forward with `create`, make a preliminary check to make sure things are ready.
+        """
         if len(self.options.placement_info) > self.get_replication_factor():
             raise RuntimeError("Number of placement info fields is larger than "
                                "the replication factor and hence the number of servers.")
@@ -1578,7 +1581,7 @@ class ClusterControl:
                 self.cluster_config[attr_name] = attr_value
         self.cluster_config['ports'] = self.options.base_ports
 
-        self.create_sanity_check()
+        self.create_ready_check()
         os.makedirs(self.options.cluster_base_dir)
         self.for_all_daemons(self.start_daemon)
         self.wait_for_cluster_or_raise()
