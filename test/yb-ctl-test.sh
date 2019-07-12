@@ -235,6 +235,8 @@ log "OSTYPE: $OSTYPE"
 log "USER: $USER"
 log "TRAVIS: ${TRAVIS:-undefined}"
 
+# Mac needs loopback aliases explicitly created:
+#   https://docs.yugabyte.com/latest/quick-start/install/
 if [[ ${TRAVIS:-} == "true" && $OSTYPE == darwin* ]]; then
   sudo ifconfig lo0 alias 127.0.0.2
   sudo ifconfig lo0 alias 127.0.0.3
