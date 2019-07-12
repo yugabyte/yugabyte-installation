@@ -107,6 +107,7 @@ LOCALHOST_IP = '127.0.0.1'
 
 SLEEP_TIME_IN_SEC = 1
 MAX_WAIT_SECONDS = 45
+MAX_PROCESS_WAIT_SECONDS = 10
 DEFAULT_REPLICATION_FACTOR = 1
 
 # A regex to get data directories out a command line of a running process.
@@ -1379,7 +1380,7 @@ class ClusterControl:
             return all(sum(pids.values(), []))
 
         logging.info("Waiting for master and tserver processes to be up.")
-        if not retry_call_with_timeout(call_check_for_processes, self.options.timeout):
+        if not retry_call_with_timeout(call_check_for_processes, MAX_PROCESS_WAIT_SECONDS):
             self.dump_missing_process_error_logs()
             logging.error("Failed waiting for master and tserver processes to come up.")
             return False
