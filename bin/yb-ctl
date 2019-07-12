@@ -1348,6 +1348,24 @@ class ClusterControl:
         if not retry_call_with_timeout(call_change_config, self.options.timeout):
             raise ExitWithError("Could not change master config...")
 
+    def dump_missing_process_error_logs(self):
+        pids = self.for_all_daemons(self.get_pid)
+        for daemon_type, pid_list in pids.items():
+            for index, pid in enumerate(pid_list, 1):
+                if pid is None:
+                    daemon_id = DaemonId(daemon_type, index)
+                    node_base_dirs = self.get_base_node_dirs(daemon_id.index)
+                    first_base_dir = node_base_dirs[0]
+                    log_name = daemon_id.daemon_type + ".err"
+                    log_path = os.path.join(first_base_dir, log_name)
+                    if os.path.exists(log_path):
+                        with open(log_path) as log:
+                            print("Viewing log at {}:".format(log_path), file=sys.stderr)
+                            if sys.version_info[0] >= 3:
+                                shutil.copyfileobj(log, sys.stderr.buffer)
+                            else:
+                                shutil.copyfileobj(log, sys.stderr)
+
     def wait_for_cluster(self):
         """
         This will wait for the masters to elect a leader and then keep querying for how many TS
@@ -1364,6 +1382,7 @@ class ClusterControl:
 
         logging.info("Waiting for master and tserver processes to be up.")
         if not retry_call_with_timeout(call_check_for_processes, self.options.timeout):
+            self.dump_missing_process_error_logs()
             logging.error("Failed waiting for master and tserver processes to come up.")
             return False
 
@@ -1383,6 +1402,7 @@ class ClusterControl:
 
         def call_check_for_ts(should_get_error):
             if not call_check_for_processes(should_get_error):
+                self.dump_missing_process_error_logs()
                 raise ExitWithError("At least one master or tserver process is down.")
 
             max_num_tservers = self.get_number_of_servers(DAEMON_TYPE_TSERVER)
