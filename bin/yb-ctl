@@ -1365,19 +1365,19 @@ class ClusterControl:
         if not retry_call_with_timeout(call_change_config, self.options.timeout):
             raise ExitWithError("Could not change master config...")
 
-    def keep_and_dump_log(self, log_path):
+    def dump_file_to_stderr(self, file_path):
         """
-        Keeps log file intact and dumps log file contents to STDERR.
+        Keep file intact and dump file contents to STDERR.
 
-        :param log_path: path to the log file, assumed to exist
-        :type log_path: str
+        :param file_path: path to the file, assumed to exist
+        :type file_path: str
         """
-        print("Viewing log at {}:".format(log_path), file=sys.stderr)
-        with open(log_path, "rb") as log:
+        print("Viewing file {}:".format(file_path), file=sys.stderr)
+        with open(file_path, "rb") as f:
             if sys.version_info[0] >= 3:
-                shutil.copyfileobj(log, sys.stderr.buffer)
+                shutil.copyfileobj(f, sys.stderr.buffer)
             else:
-                shutil.copyfileobj(log, sys.stderr)
+                shutil.copyfileobj(f, sys.stderr)
 
     def dump_missing_process_error_logs(self):
         pids = self.for_all_daemons(self.get_pid)
@@ -1388,9 +1388,9 @@ class ClusterControl:
                     daemon_id = DaemonId(daemon_type, index)
                     log_path = self.get_log_path(daemon_id)
                     if os.path.exists(log_path):
-                        self.keep_and_dump_log(log_path)
+                        self.dump_file_to_stderr(log_path)
                     else:
-                        print("Process {0} is down, and there is no corresponding error log at {1}".
+                        print("Process {0} is down, and there is no corresponding error log: {1}".
                               format(daemon_id, log_path), file=sys.stderr)
 
     def wait_for_cluster(self):
@@ -1853,7 +1853,7 @@ class ClusterControl:
         if os.path.isfile(self.log_file):
             # If we called the atexit handler and we have a file, it means we must have had errors.
             if keep_log_file_and_dump_to_stderr:
-                self.keep_and_dump_log(self.log_file)
+                self.dump_file_to_stderr(self.log_file)
                 print("^^^ Encountered errors ^^^")
             # Whichever cleanup comes first should remove the file.
             # TODO: Maybe keep the log file around and allow the user to upload a gist with the log.
