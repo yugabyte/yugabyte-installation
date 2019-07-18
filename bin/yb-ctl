@@ -106,8 +106,8 @@ YEDIS_DEFAULT_PORT = 6379
 LOCALHOST_IP = '127.0.0.1'
 
 SLEEP_TIME_IN_SEC = 1
-MAX_WAIT_SECONDS = 45
-MAX_PROCESS_WAIT_SECONDS = 10
+MAX_YB_ADMIN_WAIT_SECONDS = 45
+MAX_CLUSTER_UP_WAIT_SECONDS = 10
 DEFAULT_REPLICATION_FACTOR = 1
 
 # A regex to get data directories out a command line of a running process.
@@ -135,7 +135,7 @@ def call_get_output_maybe_error(cmd_list, should_get_error=False):
         return output
 
 
-def retry_call_with_timeout(fn, timeout_sec=MAX_WAIT_SECONDS):
+def retry_call_with_timeout(fn, timeout_sec=MAX_YB_ADMIN_WAIT_SECONDS):
     """
     This will retry a given function that is supposed to be doing subprocess callouts. Based on
     the passed in function behavior, this function will behave accordingly:
@@ -541,7 +541,8 @@ class ClusterOptions:
     def __init__(self):
         self.max_daemon_index = 20
         self.num_shards_per_tserver = None
-        self.timeout = None
+        self.timeout_yb_admin = None
+        self.timeout_cluster_up = None
 
         self.cluster_base_dir = None
 
@@ -623,7 +624,8 @@ class ClusterOptions:
         self.custom_binary_dir = args.binary_dir
         self.cluster_base_dir = args.data_dir
         self.num_shards_per_tserver = args.num_shards_per_tserver
-        self.timeout = args.timeout
+        self.timeout_yb_admin = args.timeout_yb_admin
+        self.timeout_cluster_up = args.timeout_cluster_up
 
         if hasattr(args, "v"):
             self.verbose_level = args.v
@@ -925,8 +927,11 @@ class ClusterControl:
             "--num_shards_per_tserver", default=2, type=int,
             help="Number of shards (tablets) to start per tablet server for each table.")
         self.parser.add_argument(
-            "--timeout", default=MAX_WAIT_SECONDS, type=float,
-            help="Timeout in seconds for operations that wait on the cluster")
+            "--timeout-yb-admin", default=MAX_YB_ADMIN_WAIT_SECONDS, type=float,
+            help="Timeout in seconds for operations that call yb-admin and wait on the cluster")
+        self.parser.add_argument(
+            "--timeout-cluster-up", default=MAX_CLUSTER_UP_WAIT_SECONDS, type=float,
+            help="Timeout in seconds for operations that wait on the cluster to come up")
         self.parser.add_argument(
             "--verbose", action="store_true",
             help="If specified, will log internal debug messages to stderr.")
@@ -1041,7 +1046,7 @@ class ClusterControl:
             call_get_output_maybe_error(cmd, should_get_error)
             logging.info("Successfully modified placement info.")
             return True
-        if not retry_call_with_timeout(call_modify_placement_info, self.options.timeout):
+        if not retry_call_with_timeout(call_modify_placement_info, self.options.timeout_yb_admin):
             raise RuntimeError("Could not modify placement info for the cluster.")
 
     def get_number_of_servers(self, daemon_type):
@@ -1362,7 +1367,7 @@ class ClusterControl:
             call_get_output_maybe_error(cmd, should_get_error)
             return True
 
-        if not retry_call_with_timeout(call_change_config, self.options.timeout):
+        if not retry_call_with_timeout(call_change_config, self.options.timeout_yb_admin):
             raise ExitWithError("Could not change master config...")
 
     def dump_file_to_stderr(self, file_path):
@@ -1406,7 +1411,7 @@ class ClusterControl:
             return all(sum(pids.values(), []))
 
         logging.info("Waiting for master and tserver processes to come up.")
-        if not retry_call_with_timeout(call_check_for_processes, MAX_PROCESS_WAIT_SECONDS):
+        if not retry_call_with_timeout(call_check_for_processes, self.options.timeout_cluster_up):
             self.dump_missing_process_error_logs()
             logging.error("Failed waiting for master and tserver processes to come up.")
             return False
@@ -1466,7 +1471,7 @@ class ClusterControl:
                     num_yb_admin_ts, num_alive_ts))
 
         logging.info("Waiting for master leader election and tablet server registration.")
-        if not retry_call_with_timeout(call_check_for_ts, self.options.timeout):
+        if not retry_call_with_timeout(call_check_for_ts, self.options.timeout_yb_admin):
             logging.error("Failed waiting for {} tservers, got {}".format(
                 num_alive_ts, num_yb_admin_ts))
             return False
