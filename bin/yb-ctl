@@ -1329,8 +1329,8 @@ class ClusterControl:
 
         # Make sure that there are no master or tserver processes before the `create`.
         pids = self.for_all_daemons(self.get_pid)
-        logging.info("PIDs found: {}".format(pids))
         if any(sum(pids.values(), [])):
+            logging.info("PIDs found: {}".format(pids))
             raise ExitWithError("Processes are still up. Make sure to destroy old state.")
 
     def change_config_if_master(self, daemon_id, cmd_type):
@@ -1350,7 +1350,8 @@ class ClusterControl:
 
     def dump_missing_process_error_logs(self):
         pids = self.for_all_daemons(self.get_pid)
-        for daemon_type, pid_list in pids.items():
+        logging.info("PIDs found: {}".format(pids))
+        for daemon_type, pid_list in pids.iteritems():
             for index, pid in enumerate(pid_list, 1):
                 if pid is None:
                     daemon_id = DaemonId(daemon_type, index)
@@ -1365,6 +1366,9 @@ class ClusterControl:
                                 shutil.copyfileobj(log, sys.stderr.buffer)
                             else:
                                 shutil.copyfileobj(log, sys.stderr)
+                    else:
+                        print("Process {0} is down, and there is no corresponding error log at {1}".
+                              format(daemon_id, log_path), file=sys.stderr)
 
     def wait_for_cluster(self):
         """
@@ -1376,10 +1380,9 @@ class ClusterControl:
         # Wait for master and tserver processes to be ready.
         def call_check_for_processes(should_get_error):
             pids = self.for_all_daemons(self.get_pid)
-            logging.info("PIDs found: {}".format(pids))
             return all(sum(pids.values(), []))
 
-        logging.info("Waiting for master and tserver processes to be up.")
+        logging.info("Waiting for master and tserver processes to come up.")
         if not retry_call_with_timeout(call_check_for_processes, MAX_PROCESS_WAIT_SECONDS):
             self.dump_missing_process_error_logs()
             logging.error("Failed waiting for master and tserver processes to come up.")
