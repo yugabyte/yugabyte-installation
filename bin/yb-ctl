@@ -878,6 +878,24 @@ class ClusterControl:
         return ["{}/node-{}/{}".format(self.options.cluster_base_dir, daemon_index, drive)
                 for drive in self.get_drive_paths()]
 
+    def get_log_path(self, daemon_id, is_err=True):
+        """
+        Get the out or error log path for a daemon.  A log file may not necessarily exist at the
+        returned path.
+
+        :param daemon_id: daemon to get the log path for
+        :type daemon_id: :class:`DaemonId`
+        :param is_err: whether to get the error log path rather than the out log path
+        :type is_err: bool
+        :returns: path to the specified out or error log of the specified daemon
+        :rtype: str
+        """
+        node_base_dirs = self.get_base_node_dirs(daemon_id.index)
+        first_base_dir = node_base_dirs[0]
+        extension = "err" if is_err else "out"
+        log_name = "{0}.{1}".format(daemon_id.daemon_type, extension)
+        return os.path.join(first_base_dir, log_name)
+
     @staticmethod
     def add_extra_flags_arguments(subparser):
         subparser.add_argument(
@@ -1120,7 +1138,6 @@ class ClusterControl:
 
     def build_command(self, daemon_id, specific_arg_list):
         node_base_dirs = self.get_base_node_dirs(daemon_id.index)
-        first_base_dir = node_base_dirs[0]
 
         binary_path = self.options.get_server_binary_path(daemon_id.daemon_type)
         command_list = [
@@ -1149,8 +1166,8 @@ class ClusterControl:
         command_list.extend(specific_arg_list)
 
         # Redirect out and err and launch in the background
-        command_list.append(">\"{0}/{1}.out\" 2>\"{0}/{1}.err\" &".format(
-            first_base_dir, daemon_id.daemon_type))
+        command_list.append(">\"{0}\" 2>\"{1}\" &".format(
+            self.get_log_path(daemon_id, is_err=False), self.get_log_path(daemon_id, is_err=True)))
         return " ".join(command_list)
 
     @staticmethod
@@ -1348,6 +1365,20 @@ class ClusterControl:
         if not retry_call_with_timeout(call_change_config, self.options.timeout):
             raise ExitWithError("Could not change master config...")
 
+    def keep_and_dump_log(self, log_path):
+        """
+        Keeps log file intact and dumps log file contents to STDERR.
+
+        :param log_path: path to the log file, assumed to exist
+        :type log_path: str
+        """
+        print("Viewing log at {}:".format(log_path), file=sys.stderr)
+        with open(log_path, "rb") as log:
+            if sys.version_info[0] >= 3:
+                shutil.copyfileobj(log, sys.stderr.buffer)
+            else:
+                shutil.copyfileobj(log, sys.stderr)
+
     def dump_missing_process_error_logs(self):
         pids = self.for_all_daemons(self.get_pid)
         logging.info("PIDs found: {}".format(pids))
@@ -1355,17 +1386,9 @@ class ClusterControl:
             for index, pid in enumerate(pid_list, 1):
                 if pid is None:
                     daemon_id = DaemonId(daemon_type, index)
-                    node_base_dirs = self.get_base_node_dirs(daemon_id.index)
-                    first_base_dir = node_base_dirs[0]
-                    log_name = daemon_id.daemon_type + ".err"
-                    log_path = os.path.join(first_base_dir, log_name)
+                    log_path = self.get_log_path(daemon_id)
                     if os.path.exists(log_path):
-                        with open(log_path) as log:
-                            print("Viewing log at {}:".format(log_path), file=sys.stderr)
-                            if sys.version_info[0] >= 3:
-                                shutil.copyfileobj(log, sys.stderr.buffer)
-                            else:
-                                shutil.copyfileobj(log, sys.stderr)
+                        self.keep_and_dump_log(log_path)
                     else:
                         print("Process {0} is down, and there is no corresponding error log at {1}".
                               format(daemon_id, log_path), file=sys.stderr)
@@ -1830,11 +1853,7 @@ class ClusterControl:
         if os.path.isfile(self.log_file):
             # If we called the atexit handler and we have a file, it means we must have had errors.
             if keep_log_file_and_dump_to_stderr:
-                with open(self.log_file, "rb") as log:
-                    if sys.version_info[0] >= 3:
-                        shutil.copyfileobj(log, sys.stderr.buffer)
-                    else:
-                        shutil.copyfileobj(log, sys.stderr)
+                self.keep_and_dump_log(self.log_file)
                 print("^^^ Encountered errors ^^^")
             # Whichever cleanup comes first should remove the file.
             # TODO: Maybe keep the log file around and allow the user to upload a gist with the log.
