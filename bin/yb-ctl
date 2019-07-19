@@ -106,7 +106,8 @@ YEDIS_DEFAULT_PORT = 6379
 LOCALHOST_IP = '127.0.0.1'
 
 SLEEP_TIME_IN_SEC = 1
-MAX_WAIT_SECONDS = 45
+MAX_YB_ADMIN_WAIT_SEC = 45
+MAX_WAIT_FOR_PROCESSES_RUNNING_SEC = 10
 DEFAULT_REPLICATION_FACTOR = 1
 
 # A regex to get data directories out a command line of a running process.
@@ -134,7 +135,7 @@ def call_get_output_maybe_error(cmd_list, should_get_error=False):
         return output
 
 
-def retry_call_with_timeout(fn, timeout_sec=MAX_WAIT_SECONDS):
+def retry_call_with_timeout(fn, timeout_sec=MAX_YB_ADMIN_WAIT_SEC):
     """
     This will retry a given function that is supposed to be doing subprocess callouts. Based on
     the passed in function behavior, this function will behave accordingly:
@@ -540,7 +541,8 @@ class ClusterOptions:
     def __init__(self):
         self.max_daemon_index = 20
         self.num_shards_per_tserver = None
-        self.timeout = None
+        self.timeout_yb_admin_sec = None
+        self.timeout_processes_running_sec = None
 
         self.cluster_base_dir = None
 
@@ -622,7 +624,8 @@ class ClusterOptions:
         self.custom_binary_dir = args.binary_dir
         self.cluster_base_dir = args.data_dir
         self.num_shards_per_tserver = args.num_shards_per_tserver
-        self.timeout = args.timeout
+        self.timeout_yb_admin_sec = args.timeout_yb_admin_sec
+        self.timeout_processes_running_sec = args.timeout_processes_running_sec
 
         if hasattr(args, "v"):
             self.verbose_level = args.v
@@ -877,6 +880,24 @@ class ClusterControl:
         return ["{}/node-{}/{}".format(self.options.cluster_base_dir, daemon_index, drive)
                 for drive in self.get_drive_paths()]
 
+    def get_log_path(self, daemon_id, is_err=True):
+        """
+        Get the out or error log path for a daemon.  A log file may not necessarily exist at the
+        returned path.
+
+        :param daemon_id: daemon to get the log path for
+        :type daemon_id: :class:`DaemonId`
+        :param is_err: whether to get the error log path rather than the out log path
+        :type is_err: bool
+        :returns: path to the specified out or error log of the specified daemon
+        :rtype: str
+        """
+        node_base_dirs = self.get_base_node_dirs(daemon_id.index)
+        first_base_dir = node_base_dirs[0]
+        extension = "err" if is_err else "out"
+        log_name = "{0}.{1}".format(daemon_id.daemon_type, extension)
+        return os.path.join(first_base_dir, log_name)
+
     @staticmethod
     def add_extra_flags_arguments(subparser):
         subparser.add_argument(
@@ -906,8 +927,13 @@ class ClusterControl:
             "--num_shards_per_tserver", default=2, type=int,
             help="Number of shards (tablets) to start per tablet server for each table.")
         self.parser.add_argument(
-            "--timeout", default=MAX_WAIT_SECONDS, type=float,
-            help="Timeout in seconds for operations that wait on the cluster")
+            "--timeout-yb-admin-sec", default=MAX_YB_ADMIN_WAIT_SEC, type=float,
+            help="Timeout in seconds for operations that call yb-admin and wait on the cluster.")
+        self.parser.add_argument(
+            "--timeout-processes-running-sec", default=MAX_WAIT_FOR_PROCESSES_RUNNING_SEC,
+            type=float,
+            help="Timeout in seconds for operations that wait on the master and tserver processes "
+                 "to come up and start running.")
         self.parser.add_argument(
             "--verbose", action="store_true",
             help="If specified, will log internal debug messages to stderr.")
@@ -1022,7 +1048,8 @@ class ClusterControl:
             call_get_output_maybe_error(cmd, should_get_error)
             logging.info("Successfully modified placement info.")
             return True
-        if not retry_call_with_timeout(call_modify_placement_info, self.options.timeout):
+        if not retry_call_with_timeout(call_modify_placement_info,
+                                       self.options.timeout_yb_admin_sec):
             raise RuntimeError("Could not modify placement info for the cluster.")
 
     def get_number_of_servers(self, daemon_type):
@@ -1119,7 +1146,6 @@ class ClusterControl:
 
     def build_command(self, daemon_id, specific_arg_list):
         node_base_dirs = self.get_base_node_dirs(daemon_id.index)
-        first_base_dir = node_base_dirs[0]
 
         binary_path = self.options.get_server_binary_path(daemon_id.daemon_type)
         command_list = [
@@ -1148,8 +1174,8 @@ class ClusterControl:
         command_list.extend(specific_arg_list)
 
         # Redirect out and err and launch in the background
-        command_list.append(">\"{0}/{1}.out\" 2>\"{0}/{1}.err\" &".format(
-            first_base_dir, daemon_id.daemon_type))
+        command_list.append(">\"{0}\" 2>\"{1}\" &".format(
+            self.get_log_path(daemon_id, is_err=False), self.get_log_path(daemon_id, is_err=True)))
         return " ".join(command_list)
 
     @staticmethod
@@ -1245,8 +1271,14 @@ class ClusterControl:
             logging.info("{} already stopped".format(name))
             return
         logging.info("Stopping {} PID={}".format(name, pid))
-        # Kill the process.
-        os.kill(pid, signal.SIGTERM)
+        # Kill the process, if it exists.
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError as e:
+            if e.errno == os.errno.ESRCH:
+                logging.info("{} does not exist; nothing to stop".format(name))
+            else:
+                raise e
 
         # Wait for process to stop.
         last_msg_time = time.time()
@@ -1296,7 +1328,10 @@ class ClusterControl:
         self.stop_daemon(daemon_id)
         self.start_daemon(daemon_id)
 
-    def start_helper(self, server_counts_map):
+    def pre_create_checks(self):
+        """
+        Before moving forward with `create`, make a preliminary check to make sure things are ready.
+        """
         if len(self.options.placement_info) > self.get_replication_factor():
             raise RuntimeError("Number of placement info fields is larger than "
                                "the replication factor and hence the number of servers.")
@@ -1316,8 +1351,11 @@ class ClusterControl:
                  "Use --data_dir to specify a different data directory.").format(
                     self.options.cluster_base_dir))
 
-        os.makedirs(self.options.cluster_base_dir)
-        self.for_all_daemons(self.start_daemon, server_counts_map)
+        # Make sure that there are no master or tserver processes before the `create`.
+        pids = self.for_all_daemons(self.get_pid)
+        if any(sum(pids.values(), [])):
+            logging.info("PIDs found: {}".format(pids))
+            raise ExitWithError("Processes are still up. Make sure to destroy old state.")
 
     def change_config_if_master(self, daemon_id, cmd_type):
         if daemon_id.daemon_type == DAEMON_TYPE_TSERVER:
@@ -1331,8 +1369,36 @@ class ClusterControl:
             call_get_output_maybe_error(cmd, should_get_error)
             return True
 
-        if not retry_call_with_timeout(call_change_config, self.options.timeout):
+        if not retry_call_with_timeout(call_change_config, self.options.timeout_yb_admin_sec):
             raise ExitWithError("Could not change master config...")
+
+    def dump_file_to_stderr(self, file_path):
+        """
+        Keep file intact and dump file contents to STDERR.
+
+        :param file_path: path to the file, assumed to exist
+        :type file_path: str
+        """
+        print("Viewing file {}:".format(file_path), file=sys.stderr)
+        with open(file_path, "rb") as f:
+            if sys.version_info[0] >= 3:
+                shutil.copyfileobj(f, sys.stderr.buffer)
+            else:
+                shutil.copyfileobj(f, sys.stderr)
+
+    def dump_missing_process_error_logs(self):
+        pids = self.for_all_daemons(self.get_pid)
+        logging.info("PIDs found: {}".format(pids))
+        for daemon_type, pid_list in pids.iteritems():
+            for index, pid in enumerate(pid_list, 1):
+                if pid is None:
+                    daemon_id = DaemonId(daemon_type, index)
+                    log_path = self.get_log_path(daemon_id)
+                    if os.path.exists(log_path):
+                        self.dump_file_to_stderr(log_path)
+                    else:
+                        print("Process {0} is down, and there is no corresponding error log: {1}".
+                              format(daemon_id, log_path), file=sys.stderr)
 
     def wait_for_cluster(self):
         """
@@ -1341,6 +1407,18 @@ class ClusterControl:
         alive (based on valid PID), then this function returns True. Anything else will end up
         returning False.
         """
+        # Wait for master and tserver processes to be ready.
+        def call_check_for_processes(should_get_error):
+            pids = self.for_all_daemons(self.get_pid)
+            return all(sum(pids.values(), []))
+
+        logging.info("Waiting for master and tserver processes to come up.")
+        if not retry_call_with_timeout(call_check_for_processes,
+                                       self.options.timeout_processes_running_sec):
+            self.dump_missing_process_error_logs()
+            logging.error("Failed waiting for master and tserver processes to come up.")
+            return False
+
         # Wait for master leader to be ready, and wait for enough tservers.
         # 'Enough' here means that the number of live tservers reported to the master should be
         # equal to the number of TS we have started -- based on directories we have on the FS.
@@ -1356,6 +1434,10 @@ class ClusterControl:
         num_yb_admin_ts = None
 
         def call_check_for_ts(should_get_error):
+            if not call_check_for_processes(should_get_error):
+                self.dump_missing_process_error_logs()
+                raise ExitWithError("At least one master or tserver process is down.")
+
             max_num_tservers = self.get_number_of_servers(DAEMON_TYPE_TSERVER)
             num_alive_ts = sum([self.get_pid(DaemonId(DAEMON_TYPE_TSERVER, i)) is not None
                                 for i in range(1, max_num_tservers + 1)])
@@ -1392,10 +1474,11 @@ class ClusterControl:
                     num_yb_admin_ts, num_alive_ts))
 
         logging.info("Waiting for master leader election and tablet server registration.")
-        if not retry_call_with_timeout(call_check_for_ts, self.options.timeout):
+        if not retry_call_with_timeout(call_check_for_ts, self.options.timeout_yb_admin_sec):
             logging.error("Failed waiting for {} tservers, got {}".format(
                 num_alive_ts, num_yb_admin_ts))
             return False
+
         return True
 
     def wait_for_cluster_or_raise(self):
@@ -1519,18 +1602,20 @@ class ClusterControl:
         title = "Node {}: {}".format(daemon_index, ", ".join(process_list))
         self.print_status_box(title, info_kv_list)
 
-    def for_all_daemons(self, fn, server_counts_map=None):
+    def for_all_daemons(self, fn):
         """
         Run the given function for all daemons.
-        """
-        for daemon_type in DAEMON_TYPES:
-            if server_counts_map:
-                num_servers = server_counts_map[daemon_type]
-            else:
-                num_servers = self.get_number_of_servers(daemon_type)
 
+        :returns: return values of each function call.
+        :rtype: dict
+        """
+        fn_returns = dict()
+        for daemon_type in DAEMON_TYPES:
+            num_servers = self.get_number_of_servers(daemon_type)
             for daemon_index in range(1, num_servers + 1):
-                fn(DaemonId(daemon_type, daemon_index))
+                fn_returns.setdefault(daemon_type, []).append(
+                    fn(DaemonId(daemon_type, daemon_index)))
+        return fn_returns
 
     def create_cmd_impl(self):
         print("Creating cluster.")
@@ -1550,12 +1635,9 @@ class ClusterControl:
                 self.cluster_config[attr_name] = attr_value
         self.cluster_config['ports'] = self.options.base_ports
 
-        server_counts_map = {
-            DAEMON_TYPE_MASTER: server_counts,
-            DAEMON_TYPE_TSERVER: server_counts
-        }
-
-        self.start_helper(server_counts_map)
+        self.pre_create_checks()
+        os.makedirs(self.options.cluster_base_dir)
+        self.for_all_daemons(self.start_daemon)
         self.wait_for_cluster_or_raise()
         self.modify_placement_info()
 
@@ -1779,11 +1861,7 @@ class ClusterControl:
         if os.path.isfile(self.log_file):
             # If we called the atexit handler and we have a file, it means we must have had errors.
             if keep_log_file_and_dump_to_stderr:
-                with open(self.log_file, "rb") as log:
-                    if sys.version_info[0] >= 3:
-                        shutil.copyfileobj(log, sys.stderr.buffer)
-                    else:
-                        shutil.copyfileobj(log, sys.stderr)
+                self.dump_file_to_stderr(self.log_file)
                 print("^^^ Encountered errors ^^^")
             # Whichever cleanup comes first should remove the file.
             # TODO: Maybe keep the log file around and allow the user to upload a gist with the log.
