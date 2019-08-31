@@ -49,7 +49,7 @@ verify_ysqlsh() {
   # FATAL:  the database system is starting up
   sleep 1
 
-  local ysqlsh_cmd=( "$installation_dir"/bin/ysqlsh -h "$ysql_ip" -p "$ysql_port" postgres )
+  local ysqlsh_cmd=( "$installation_dir"/bin/ysqlsh -h "$ysql_ip" -p "$ysql_port" -U postgres )
   local table_name="mytable$RANDOM"
   log "Creating a YSQL table and inserting a bit of data"
   "${ysqlsh_cmd[@]}" <<-EOF
@@ -291,6 +291,53 @@ verify_ysqlsh 1 "$custom_ysql_port"
 (
   set -x
   "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" destroy
+)
+
+log_heading "Test creating multiple universes"
+data_dir_1="/tmp/yb-ctl-test-data-$( date +%Y-%m-%dT%H_%M_%S )-$RANDOM-1"
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_1" create $create_flags
+)
+verify_ysqlsh
+
+log_heading "Creating second universe with custom ip_start"
+custom_ip_start=20
+data_dir_2="/tmp/yb-ctl-test-data-$( date +%Y-%m-%dT%H_%M_%S )-$RANDOM-2"
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_2" create $create_flags \
+      --ip_start "$custom_ip_start"
+)
+verify_ysqlsh "$custom_ip_start"
+
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_1" stop
+)
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_2" stop
+)
+
+log "Checking that the universes and custom ip addresses persist across restarts"
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_1" start $create_flags
+)
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_2" start $create_flags
+)
+verify_ysqlsh
+verify_ysqlsh "$custom_ip_start"
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_1" destroy
+)
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_2" destroy
 )
 
 # -------------------------------------------------------------------------------------------------

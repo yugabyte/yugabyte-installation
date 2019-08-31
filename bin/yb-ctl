@@ -109,6 +109,7 @@ SLEEP_TIME_IN_SEC = 1
 MAX_YB_ADMIN_WAIT_SEC = 45
 MAX_WAIT_FOR_PROCESSES_RUNNING_SEC = 10
 DEFAULT_REPLICATION_FACTOR = 1
+DEFAULT_IP_START = 1
 
 # A regex to get data directories out a command line of a running process.
 # Needs to match e.g. the following command line snippet:
@@ -505,9 +506,6 @@ class DaemonId:
     def is_tserver(self):
         return self.daemon_type == DAEMON_TYPE_TSERVER
 
-    def get_ip_address(self):
-        return get_local_ip(self.index)
-
     def supports_placement(self):
         return self.daemon_type in [DAEMON_TYPE_MASTER, DAEMON_TYPE_TSERVER]
 
@@ -576,6 +574,7 @@ class ClusterOptions:
         self.enable_ysql = None
         self.num_drives = None
         self.replication_factor = DEFAULT_REPLICATION_FACTOR
+        self.ip_start = DEFAULT_IP_START
 
     def parse_flag_args(self, flag_args):
         flags = [] if flag_args is None else flag_args.split(",")
@@ -632,6 +631,9 @@ class ClusterOptions:
 
         if hasattr(args, "use_cassandra_authentication"):
             self.use_cassandra_authentication = args.use_cassandra_authentication
+
+        if hasattr(args, "ip_start"):
+            self.ip_start = args.ip_start
 
         for arg in ["master_flags", "tserver_flags"]:
             try:
@@ -759,8 +761,15 @@ class ClusterOptions:
         raise RuntimeError("No binary found for {}. Considered binary directories: {}".format(
             binary_name, binary_dirs))
 
+    def get_ip_start(self):
+        return self.cluster_config.get("ip_start") or self.ip_start
+
+    def get_ip_address(self, daemon_id):
+        # Subtract 1 because daemon_id.index starts from 1.
+        return get_local_ip(self.get_ip_start() + daemon_id.index - 1)
+
     def get_host_port(self, daemon_id, port_type):
-        base_local_url = daemon_id.get_ip_address()
+        base_local_url = self.get_ip_address(daemon_id)
         if port_type in PROTOCOL_TYPES:
             port_str = str(self.get_client_protocol_port(port_type))
         else:
@@ -1027,6 +1036,10 @@ class ClusterControl:
                 "--num_drives", default=1, type=int,
                 help="We create separate directories and treat them as separate drives.")
 
+            subparsers[cmd].add_argument(
+                "--ip_start", default=DEFAULT_IP_START, type=int,
+                help="Start index for IP address")
+
             ClusterControl.add_extra_flags_arguments(subparsers[cmd])
             self.options.is_startup_command = True
 
@@ -1082,9 +1095,12 @@ class ClusterControl:
         }
 
     def get_pgrep_regex(self, daemon_id):
-        return "yb-{} .* --rpc_bind_addresses {}".format(
+        # Regex to get process based on daemon type and bind address. Note the explicit space after
+        # rpc_bind_addresses: This is to be able to distinguish between bind addresses with the
+        # same prefix like 127.0.0.1, 127.0.0.11, 127.0.0.12.
+        return "yb-{} .* --rpc_bind_addresses {} ".format(
             daemon_id.daemon_type,
-            daemon_id.get_ip_address())
+            self.options.get_ip_address(daemon_id))
 
     def get_pid(self, daemon_id):
         try:
@@ -1156,8 +1172,8 @@ class ClusterControl:
         command_list += [
             # Add in all the shared flags
             "--fs_data_dirs \"{}\"".format(",".join(node_base_dirs)),
-            "--webserver_interface {}".format(daemon_id.get_ip_address()),
-            "--rpc_bind_addresses {}".format(daemon_id.get_ip_address()),
+            "--webserver_interface {}".format(self.options.get_ip_address(daemon_id)),
+            "--rpc_bind_addresses {}".format(self.options.get_ip_address(daemon_id)),
             "--v {}".format(self.options.verbose_level)
         ]
 
@@ -1204,7 +1220,7 @@ class ClusterControl:
             "--yb_num_shards_per_tserver={}".format(self.options.num_shards_per_tserver),
             "--redis_proxy_bind_address=" + get_host_port('yedis'),
             "--cql_proxy_bind_address=" + get_host_port('ycql'),
-            "--local_ip_for_outbound_sockets=" + daemon_id.get_ip_address(),
+            "--local_ip_for_outbound_sockets=" + self.options.get_ip_address(daemon_id),
             # TODO ENG-2876: Enable this in master as well.
             "--use_cassandra_authentication={}".format(
                 str(self.options.use_cassandra_authentication).lower())
@@ -1362,7 +1378,7 @@ class ClusterControl:
             return
         yb_admin_binary_path = self.options.get_binary_path("yb-admin")
         cmd = [yb_admin_binary_path, "--master_addresses", self.options.master_addresses,
-               "change_master_config", cmd_type, daemon_id.get_ip_address(),
+               "change_master_config", cmd_type, self.options.get_ip_address(daemon_id),
                str(self.options.base_ports[DAEMON_TYPE_MASTER]["rpc"])]
 
         def call_change_config(should_get_error):
@@ -1521,7 +1537,7 @@ class ClusterControl:
         if not tserver_daemon_id:
             return info_kv_list
 
-        tserver_ip_address = tserver_daemon_id.get_ip_address()
+        tserver_ip_address = self.options.get_ip_address(tserver_daemon_id)
 
         # -----------------------------------------------------------------------------------------
         # ysqlsh command line
@@ -1633,7 +1649,8 @@ class ClusterControl:
             attr_value = getattr(self.options, attr_name)
             if attr_value is not None:
                 self.cluster_config[attr_name] = attr_value
-        self.cluster_config['ports'] = self.options.base_ports
+        self.cluster_config["ports"] = self.options.base_ports
+        self.cluster_config["ip_start"] = self.options.ip_start
 
         self.pre_create_checks()
         os.makedirs(self.options.cluster_base_dir)
