@@ -539,6 +539,7 @@ class ClusterOptions:
     def __init__(self):
         self.max_daemon_index = 20
         self.num_shards_per_tserver = None
+        self.ysql_num_shards_per_tserver = None
         self.timeout_yb_admin_sec = None
         self.timeout_processes_running_sec = None
 
@@ -623,6 +624,7 @@ class ClusterOptions:
         self.custom_binary_dir = args.binary_dir
         self.cluster_base_dir = args.data_dir
         self.num_shards_per_tserver = args.num_shards_per_tserver
+        self.ysql_num_shards_per_tserver = args.ysql_num_shards_per_tserver
         self.timeout_yb_admin_sec = args.timeout_yb_admin_sec
         self.timeout_processes_running_sec = args.timeout_processes_running_sec
 
@@ -934,7 +936,10 @@ class ClusterControl:
             help="Replication factor for the cluster as well as default number of masters. ")
         self.parser.add_argument(
             "--num_shards_per_tserver", default=2, type=int,
-            help="Number of shards (tablets) to start per tablet server for each table.")
+            help="Number of shards (tablets) to start per tablet server for each non-YSQL table.")
+        self.parser.add_argument(
+            "--ysql_num_shards_per_tserver", default=2, type=int,
+            help="Number of shards (tablets) to start per tablet server for each YSQL table.")
         self.parser.add_argument(
             "--timeout-yb-admin-sec", default=MAX_YB_ADMIN_WAIT_SEC, type=float,
             help="Timeout in seconds for operations that call yb-admin and wait on the cluster.")
@@ -1201,7 +1206,8 @@ class ClusterControl:
     def get_master_only_flags(self, daemon_id):
         command_list = [
             "--replication_factor={}".format(self.get_replication_factor()),
-            "--yb_num_shards_per_tserver {}".format(self.options.num_shards_per_tserver)
+            "--yb_num_shards_per_tserver {}".format(self.options.num_shards_per_tserver),
+            "--ysql_num_shards_per_tserver={}".format(self.options.ysql_num_shards_per_tserver)
         ]
 
         if not self.options.is_shell_master:
@@ -1223,7 +1229,8 @@ class ClusterControl:
             "--local_ip_for_outbound_sockets=" + self.options.get_ip_address(daemon_id),
             # TODO ENG-2876: Enable this in master as well.
             "--use_cassandra_authentication={}".format(
-                str(self.options.use_cassandra_authentication).lower())
+                str(self.options.use_cassandra_authentication).lower()),
+            "--ysql_num_shards_per_tserver={}".format(self.options.ysql_num_shards_per_tserver)
         ]
         if self.is_ysql_enabled():
             command_list += [
