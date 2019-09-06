@@ -293,52 +293,52 @@ verify_ysqlsh 1 "$custom_ysql_port"
   "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" destroy
 )
 
-# log_heading "Test creating multiple universes"
-# data_dir_1="/tmp/yb-ctl-test-data-$( date +%Y-%m-%dT%H_%M_%S )-$RANDOM-1"
-# (
-#   set -x
-#   "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_1" create $create_flags
-# )
-# verify_ysqlsh
+log_heading "Test creating multiple universes"
+data_dir_1="/tmp/yb-ctl-test-data-$( date +%Y-%m-%dT%H_%M_%S )-$RANDOM-1"
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_1" create $create_flags
+)
+verify_ysqlsh
 
-# log_heading "Creating second universe with custom ip_start"
-# custom_ip_start=20
-# data_dir_2="/tmp/yb-ctl-test-data-$( date +%Y-%m-%dT%H_%M_%S )-$RANDOM-2"
-# (
-#   set -x
-#   "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_2" create $create_flags \
-#       --ip_start "$custom_ip_start"
-# )
-# verify_ysqlsh "$custom_ip_start"
+log_heading "Creating second universe with custom ip_start"
+custom_ip_start=20
+data_dir_2="/tmp/yb-ctl-test-data-$( date +%Y-%m-%dT%H_%M_%S )-$RANDOM-2"
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_2" create $create_flags \
+      --ip_start "$custom_ip_start"
+)
+verify_ysqlsh "$custom_ip_start"
 
-# (
-#   set -x
-#   "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_1" stop
-# )
-# (
-#   set -x
-#   "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_2" stop
-# )
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_1" stop
+)
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_2" stop
+)
 
-# log "Checking that the universes and custom ip addresses persist across restarts"
-# (
-#   set -x
-#   "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_1" start $create_flags
-# )
-# (
-#   set -x
-#   "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_2" start $create_flags
-# )
-# verify_ysqlsh
-# verify_ysqlsh "$custom_ip_start"
-# (
-#   set -x
-#   "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_1" destroy
-# )
-# (
-#   set -x
-#   "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_2" destroy
-# )
+log "Checking that the universes and custom ip addresses persist across restarts"
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_1" start $create_flags
+)
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_2" start $create_flags
+)
+verify_ysqlsh
+verify_ysqlsh "$custom_ip_start"
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_1" destroy
+)
+(
+  set -x
+  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_2" destroy
+)
 
 # -------------------------------------------------------------------------------------------------
 log_heading "Testing putting this version of yb-ctl inside the installation directory"
