@@ -334,11 +334,11 @@ def remove_surrounding_quotes(s):
 
 
 class Installer:
-    YUGABYTE_DB_VERSION = '1.2.11.0'
-    DOWNLOAD_URL_PATTERN = 'https://downloads.yugabyte.com/yugabyte-ce-{version}-{os}.tar.gz'
+    YUGABYTE_DB_VERSION = '1.3.2.1'
+    DOWNLOAD_URL_PATTERN = 'https://downloads.yugabyte.com/yugabyte-{version}-{os}.tar.gz'
     SHA256_SUM_BY_OS = {
-        'darwin': 'acb5982072347d8cff9742c85d0affd3dd9d86a4fa809f7a91058945a2771b50',
-        'linux': '97de55a5d4353c17eb9b8941c56ed1032fa21f98d991d953c6db47cb54659917'
+        'darwin': 'b1bbdc5d2a679757fd8f8c70f2f01b48d29e725b101c24ad32063ab3ffbffbf7',
+        'linux': '233b138ab75c8c7881d4da015982d84bce62e8ef08b56a37ecd437582ca68f72'
     }
 
     def __init__(self, only_find_existing=False):
@@ -368,7 +368,7 @@ class Installer:
                 logging.error(
                     "Directory %s exists but does not appear to be a valid YugaByte DB "
                     "installation directory. Remove that directory and re-run the script "
-                    "to re-install YugaByte DB.", installation_dir)
+                    "to re-install YugaByte DB.", self.installation_dir)
                 sys.exit(1)
             # Already installed.
             logging.info("Found existing YugaByte DB installation at %s", self.installation_dir)
