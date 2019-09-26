@@ -93,7 +93,10 @@ start_cluster_run_tests() {
   ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" destroy )
 }
 
-readonly yb_data_dir="/tmp/yb-ctl-test-data-$( date +%Y-%m-%dT%H_%M_%S )-$RANDOM"
+readonly yb_data_dir_parent="/tmp/yb-ctl-test-data-$( date +%Y-%m-%dT%H_%M_%S )-$RANDOM"
+readonly yb_data_dir=$yb_data_dir_parent/single_univ
+readonly yb_univ_1_data_dir=$yb_data_dir_parent/cdc_1
+readonly yb_univ_2_data_dir=$yb_data_dir_parent/cdc_2
 
 yb_ctl_args=(
   --data_dir "$yb_data_dir"
@@ -128,8 +131,8 @@ cleanup() {
     thick_log_heading "Dumping all the log files below:"
   fi
 
-  if [[ -d $yb_data_dir ]]; then
-    find "$yb_data_dir" \
+  if [[ -d $yb_data_dir_parent ]]; then
+    find "$yb_data_dir_parent" \
       -name "*.out" -or \
       -name "*.err" -or \
       -name "*.INFO" -or \
@@ -138,6 +141,8 @@ cleanup() {
       log_heading "$log_path"
       cat "$log_path" >&2
     done
+  else
+    log_heading "No data at $yb_data_dir_parent"
   fi
 
   thick_log_heading "End of dumping various logs"
@@ -145,20 +150,29 @@ cleanup() {
   if [[ $exit_code -ne 0 ]]; then
     echo "Scroll up past the various logs to where it says 'SEE THE ERROR MESSAGE'."
   fi
+  
   if "$keep"; then
-    log "Not killing yb-master/yb-tserver processes or removing the data directory at $yb_data_dir"
+    log "Not killing yb-master/yb-tserver processes or removing data directories at " \
+        "$yb_data_dir_parent"
   else
-    log "Killing yb-master/yb-tserver processes"
-    set +e
-    (
-      set -x
-      pkill -f "yb-master --fs_data_dirs $yb_data_dir/" -SIGKILL
-      pkill -f "yb-tserver --fs_data_dirs $yb_data_dir/" -SIGKILL
-    )
-    set -e
-    if [[ -d $yb_data_dir ]]; then
-      log "Removing data directory at $yb_data_dir"
-      ( set -x; rm -rf "$yb_data_dir" )
+    if [[ -d $yb_data_dir_parent ]]; then
+      find "$yb_data_dir_parent" \
+          -maxdepth 1 -type d | sort |
+      while read data_dir; do
+        log "Killing yb-master/yb-tserver processes for $data_dir"
+        set +e
+        (
+          set -x
+          pkill -f "yb-master --fs_data_dirs $data_dir/" -SIGKILL
+          pkill -f "yb-tserver --fs_data_dirs $data_dir/" -SIGKILL
+        )
+
+        set -e
+        if [[ -d $data_dir ]]; then
+          log "Removing data directory at $data_dir"
+          ( set -x; rm -rf "$data_dir" )
+        fi
+      done
     fi
   fi
 
@@ -251,6 +265,9 @@ if [[ ${TRAVIS:-} != "true" || $OSTYPE != darwin* ]]; then
   pycodestyle --config=pycodestyle.conf bin/yb-ctl
 fi
 
+# Make top level data dir.
+mkdir -p "$yb_data_dir_parent"
+
 trap cleanup EXIT
 
 log_heading "Running basic tests"
@@ -294,50 +311,48 @@ verify_ysqlsh 1 "$custom_ysql_port"
 )
 
 log_heading "Test creating multiple universes"
-data_dir_1="/tmp/yb-ctl-test-data-$( date +%Y-%m-%dT%H_%M_%S )-$RANDOM-1"
 (
   set -x
-  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_1" create $create_flags
+  "$python_interpreter" bin/yb-ctl --data_dir "$yb_univ_1_data_dir" --rf 1 create $create_flags
 )
 verify_ysqlsh
 
 log_heading "Creating second universe with custom ip_start"
-custom_ip_start=20
-data_dir_2="/tmp/yb-ctl-test-data-$( date +%Y-%m-%dT%H_%M_%S )-$RANDOM-2"
+custom_ip_start=2
 (
   set -x
-  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_2" create $create_flags \
-      --ip_start "$custom_ip_start"
+  "$python_interpreter" bin/yb-ctl --data_dir "$yb_univ_2_data_dir" --rf 1 create \
+      --ip_start $custom_ip_start $create_flags
 )
-verify_ysqlsh "$custom_ip_start"
+verify_ysqlsh $custom_ip_start
 
 (
   set -x
-  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_1" stop
+  "$python_interpreter" bin/yb-ctl --data_dir "$yb_univ_1_data_dir" stop
 )
 (
   set -x
-  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_2" stop
+  "$python_interpreter" bin/yb-ctl --data_dir "$yb_univ_2_data_dir" stop
 )
 
 log "Checking that the universes and custom ip addresses persist across restarts"
 (
   set -x
-  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_1" start $create_flags
+  "$python_interpreter" bin/yb-ctl --data_dir "$yb_univ_1_data_dir" start $create_flags
 )
 (
   set -x
-  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_2" start $create_flags
+  "$python_interpreter" bin/yb-ctl --data_dir "$yb_univ_2_data_dir" start $create_flags
 )
 verify_ysqlsh
-verify_ysqlsh "$custom_ip_start"
+verify_ysqlsh $custom_ip_start
 (
   set -x
-  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_1" destroy
+  "$python_interpreter" bin/yb-ctl --data_dir "$yb_univ_1_data_dir" destroy
 )
 (
   set -x
-  "$python_interpreter" bin/yb-ctl --data_dir "$data_dir_2" destroy
+  "$python_interpreter" bin/yb-ctl --data_dir "$yb_univ_2_data_dir" destroy
 )
 
 # -------------------------------------------------------------------------------------------------
