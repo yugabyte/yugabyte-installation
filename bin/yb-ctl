@@ -1213,7 +1213,9 @@ class ClusterControl:
         if not self.options.is_shell_master:
             command_list += ["--master_addresses {}".format(self.options.master_addresses)]
 
-        if not self.options.enable_ysql:
+        if self.options.enable_ysql:
+            command_list.append("--enable_ysql=true")
+        else:
             command_list.append("--enable_ysql=false")
 
         return self.customize_flags(command_list, self.options.master_flags)
@@ -1234,6 +1236,7 @@ class ClusterControl:
         ]
         if self.is_ysql_enabled():
             command_list += [
+                "--enable_ysql=true",
                 "--pgsql_proxy_bind_address=" + get_host_port('ysql')
             ]
         else:
