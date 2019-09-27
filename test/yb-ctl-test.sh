@@ -68,14 +68,14 @@ start_cluster_run_tests() {
     fatal "One arg expected: root directory to run in"
   fi
   local root_dir=$1
-  ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" start $create_flags )
+  ( set -x; "$python_interpreter" "$root_dir"/yb-ctl start $create_flags "${yb_ctl_args[@]}" )
   verify_ysqlsh
   (
     set -x
-    "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" add_node $create_flags
+    "$python_interpreter" "$root_dir"/yb-ctl add_node $create_flags "${yb_ctl_args[@]}"
   )
   verify_ysqlsh
-  ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop_node 1 )
+  ( set -x; "$python_interpreter" "$root_dir"/yb-ctl stop_node 1 "${yb_ctl_args[@]}" )
 
   # It looks like if we try to create a table in this state, the master is trying to assign
   # tablets to node 1, which is down, and times out:
@@ -86,11 +86,11 @@ start_cluster_run_tests() {
   fi
   (
     set -x
-    "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" start_node 1 $create_flags
+    "$python_interpreter" "$root_dir"/yb-ctl start_node 1 $create_flags "${yb_ctl_args[@]}"
   )
   verify_ysqlsh
-  ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" stop )
-  ( set -x; "$python_interpreter" "$root_dir"/yb-ctl "${yb_ctl_args[@]}" destroy )
+  ( set -x; "$python_interpreter" "$root_dir"/yb-ctl stop "${yb_ctl_args[@]}" )
+  ( set -x; "$python_interpreter" "$root_dir"/yb-ctl destroy "${yb_ctl_args[@]}" )
 }
 
 readonly yb_data_dir_parent="/tmp/yb-ctl-test-data-$( date +%Y-%m-%dT%H_%M_%S )-$RANDOM"
@@ -150,7 +150,7 @@ cleanup() {
   if [[ $exit_code -ne 0 ]]; then
     echo "Scroll up past the various logs to where it says 'SEE THE ERROR MESSAGE'."
   fi
-  
+
   if "$keep"; then
     log "Not killing yb-master/yb-tserver processes or removing data directories at " \
         "$yb_data_dir_parent"
@@ -273,7 +273,7 @@ trap cleanup EXIT
 log_heading "Running basic tests"
 (
   set -x
-  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" --install-if-needed create $create_flags
+  "$python_interpreter" bin/yb-ctl create $create_flags "${yb_ctl_args[@]}" --install-if-needed
 )
 
 detect_installation_dir
@@ -281,8 +281,8 @@ verify_ysqlsh
 
 (
   set -x
-  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" stop
-  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" destroy
+  "$python_interpreter" bin/yb-ctl stop "${yb_ctl_args[@]}"
+  "$python_interpreter" bin/yb-ctl destroy "${yb_ctl_args[@]}"
 )
 
 start_cluster_run_tests "bin"
@@ -291,29 +291,29 @@ log_heading "Testing YSQL port override"
 custom_ysql_port=54320
 (
   set -x
-  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" create --ysql_port "$custom_ysql_port" \
-      $create_flags
+  "$python_interpreter" bin/yb-ctl create --ysql_port "$custom_ysql_port" \
+      $create_flags "${yb_ctl_args[@]}"
 )
 verify_ysqlsh 1 "$custom_ysql_port"
 (
   set -x
-  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" stop
+  "$python_interpreter" bin/yb-ctl stop "${yb_ctl_args[@]}"
 )
 log "Checking that the custom YSQL port persists across restarts"
 (
   set -x
-  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" start $create_flags
+  "$python_interpreter" bin/yb-ctl start $create_flags "${yb_ctl_args[@]}"
 )
 verify_ysqlsh 1 "$custom_ysql_port"
 (
   set -x
-  "$python_interpreter" bin/yb-ctl "${yb_ctl_args[@]}" destroy
+  "$python_interpreter" bin/yb-ctl destroy "${yb_ctl_args[@]}"
 )
 
 log_heading "Test creating multiple universes"
 (
   set -x
-  "$python_interpreter" bin/yb-ctl --data_dir "$yb_univ_1_data_dir" --rf 1 create $create_flags
+  "$python_interpreter" bin/yb-ctl create $create_flags --data_dir "$yb_univ_1_data_dir" --rf 1
 )
 verify_ysqlsh
 
@@ -321,38 +321,38 @@ log_heading "Creating second universe with custom ip_start"
 custom_ip_start=2
 (
   set -x
-  "$python_interpreter" bin/yb-ctl --data_dir "$yb_univ_2_data_dir" --rf 1 create \
-      --ip_start $custom_ip_start $create_flags
+  "$python_interpreter" bin/yb-ctl create --ip_start $custom_ip_start $create_flags \
+      --data_dir "$yb_univ_2_data_dir" --rf 1
 )
 verify_ysqlsh $custom_ip_start
 
 (
   set -x
-  "$python_interpreter" bin/yb-ctl --data_dir "$yb_univ_1_data_dir" stop
+  "$python_interpreter" bin/yb-ctl stop --data_dir "$yb_univ_1_data_dir"
 )
 (
   set -x
-  "$python_interpreter" bin/yb-ctl --data_dir "$yb_univ_2_data_dir" stop
+  "$python_interpreter" bin/yb-ctl stop --data_dir "$yb_univ_2_data_dir"
 )
 
 log "Checking that the universes and custom ip addresses persist across restarts"
 (
   set -x
-  "$python_interpreter" bin/yb-ctl --data_dir "$yb_univ_1_data_dir" start $create_flags
+  "$python_interpreter" bin/yb-ctl start $create_flags --data_dir "$yb_univ_1_data_dir"
 )
 (
   set -x
-  "$python_interpreter" bin/yb-ctl --data_dir "$yb_univ_2_data_dir" start $create_flags
+  "$python_interpreter" bin/yb-ctl start $create_flags --data_dir "$yb_univ_2_data_dir"
 )
 verify_ysqlsh
 verify_ysqlsh $custom_ip_start
 (
   set -x
-  "$python_interpreter" bin/yb-ctl --data_dir "$yb_univ_1_data_dir" destroy
+  "$python_interpreter" bin/yb-ctl destroy --data_dir "$yb_univ_1_data_dir"
 )
 (
   set -x
-  "$python_interpreter" bin/yb-ctl --data_dir "$yb_univ_2_data_dir" destroy
+  "$python_interpreter" bin/yb-ctl destroy --data_dir "$yb_univ_2_data_dir"
 )
 
 # -------------------------------------------------------------------------------------------------
@@ -378,12 +378,12 @@ fi
 (
   set -x
   installation_dir=$yb_build_root
-  "$python_interpreter" "$submodule_bin_dir/yb-ctl" "${yb_ctl_args[@]}" start $create_flags
+  "$python_interpreter" "$submodule_bin_dir/yb-ctl" start $create_flags "${yb_ctl_args[@]}"
 )
 verify_ysqlsh
 (
-  "$python_interpreter" "$submodule_bin_dir/yb-ctl" "${yb_ctl_args[@]}" stop
-  "$python_interpreter" "$submodule_bin_dir/yb-ctl" "${yb_ctl_args[@]}" destroy
+  "$python_interpreter" "$submodule_bin_dir/yb-ctl" stop "${yb_ctl_args[@]}"
+  "$python_interpreter" "$submodule_bin_dir/yb-ctl" destroy "${yb_ctl_args[@]}"
 )
 
 log_heading "TESTS SUCCEEDED"
