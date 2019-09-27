@@ -866,7 +866,8 @@ class ClusterControl:
                  "to come up and start running.")
         self.parent_parser.add_argument(
             "--verbose", action="store_true",
-            help="If specified, will log internal debug messages to stderr.")
+            help="If specified, will log internal debug messages to stderr. Note --verbose "
+                 "affects yb-ctl and --v affects server processes.")
         self.parent_parser.add_argument(
             "--install-if-needed",
             action='store_true',
@@ -1007,9 +1008,10 @@ class ClusterControl:
                                          "in case you would want to pass more than one value.")
 
             subparsers[cmd].add_argument("--v", default=0, choices=[str(i) for i in range(5)],
-                                         help="Specify the verbosity which dictates "
-                                         "the amount of logging on servers trace files."
-                                         "Default is 0 and maximum is 4.")
+                                         help="Specify the verbosity of server processes, which "
+                                         "dictates the amount of logging on servers trace files. "
+                                         "Note --verbose affects yb-ctl and --v affects server "
+                                         "processes. Default is 0 and maximum is 4.")
 
             subparsers[cmd].add_argument("--use_cassandra_authentication",
                                          action='store_true',
