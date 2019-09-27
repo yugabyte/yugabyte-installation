@@ -815,6 +815,8 @@ class ClusterControl:
 
         self.parser = argparse.ArgumentParser()
         self.subparsers = self.parser.add_subparsers()
+        # Parent subparser holding all common flags.
+        self.parent_parser = argparse.ArgumentParser(add_help=False)
 
         # This is a dictionary serialized into JSON and written to a configuration file in the data
         # directory.
@@ -828,7 +830,7 @@ class ClusterControl:
         self.already_running_daemons = set()
 
     def setup_base_parser(self, command, help=None):
-        subparser = self.subparsers.add_parser(command, help=help)
+        subparser = self.subparsers.add_parser(command, help=help, parents=[self.parent_parser])
         func = getattr(self, "%s_cmd_impl" % command, None)
         if not func:
             raise RuntimeError("Invalid command: {}".format(command))
@@ -925,34 +927,34 @@ class ClusterControl:
         """
         Sets up the command-line parser. Called from the constructor.
         """
-        self.parser.add_argument(
+        self.parent_parser.add_argument(
             "--binary_dir", default=None,
             help="Specify a custom directory in which to find the yugabyte binaries.")
-        self.parser.add_argument(
+        self.parent_parser.add_argument(
             "--data_dir", default=get_default_data_dir(),
             help="Specify a custom directory where to store data.")
-        self.parser.add_argument(
+        self.parent_parser.add_argument(
             "--replication_factor", "--rf", default=DEFAULT_REPLICATION_FACTOR, type=int,
             help="Replication factor for the cluster as well as default number of masters. ")
-        self.parser.add_argument(
+        self.parent_parser.add_argument(
             "--num_shards_per_tserver", default=2, type=int,
             help="Number of shards (tablets) to start per tablet server for each non-YSQL table.")
-        self.parser.add_argument(
+        self.parent_parser.add_argument(
             "--ysql_num_shards_per_tserver", default=2, type=int,
             help="Number of shards (tablets) to start per tablet server for each YSQL table.")
-        self.parser.add_argument(
+        self.parent_parser.add_argument(
             "--timeout-yb-admin-sec", default=MAX_YB_ADMIN_WAIT_SEC, type=float,
             help="Timeout in seconds for operations that call yb-admin and wait on the cluster.")
-        self.parser.add_argument(
+        self.parent_parser.add_argument(
             "--timeout-processes-running-sec", default=MAX_WAIT_FOR_PROCESSES_RUNNING_SEC,
             type=float,
             help="Timeout in seconds for operations that wait on the master and tserver processes "
                  "to come up and start running.")
-        self.parser.add_argument(
+        self.parent_parser.add_argument(
             "--verbose", action="store_true",
             help="If specified, will log internal debug messages to stderr.")
 
-        self.parser.add_argument(
+        self.parent_parser.add_argument(
             "--install-if-needed",
             action='store_true',
             help="With this option, if YugaByte DB is not yet installed on the system, the latest "
