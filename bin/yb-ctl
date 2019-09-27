@@ -1216,7 +1216,9 @@ class ClusterControl:
             command_list += ["--master_addresses {}".format(self.options.master_addresses)]
 
         if self.options.enable_ysql:
-            command_list.append("--use_initial_sys_catalog_snapshot")
+            command_list.append("--enable_ysql=true")
+        else:
+            command_list.append("--enable_ysql=false")
 
         return self.customize_flags(command_list, self.options.master_flags)
 
@@ -1236,9 +1238,11 @@ class ClusterControl:
         ]
         if self.is_ysql_enabled():
             command_list += [
-                "--start_pgsql_proxy",
+                "--enable_ysql=true",
                 "--pgsql_proxy_bind_address=" + get_host_port('ysql')
             ]
+        else:
+            command_list += ["--enable_ysql=false"]
         return self.customize_flags(command_list, self.options.tserver_flags)
 
     def get_placement_info_flags(self, placement_flags):
