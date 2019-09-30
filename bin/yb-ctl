@@ -816,7 +816,7 @@ class ClusterControl:
         # Parent subparser holding all common flags.
         self.parent_parser = argparse.ArgumentParser(add_help=False)
         self.setup_parent_parser()
-        self.parser = argparse.ArgumentParser(parents=[self.parent_parser])
+        self.parser = argparse.ArgumentParser()
         self.subparsers = self.parser.add_subparsers()
 
         # This is a dictionary serialized into JSON and written to a configuration file in the data
@@ -845,32 +845,31 @@ class ClusterControl:
             "--binary_dir", default=None,
             help="Specify a custom directory in which to find the yugabyte binaries.")
         self.parent_parser.add_argument(
-            "--data_dir", default=get_default_data_dir(),
+            "--data_dir", default=None,
             help="Specify a custom directory where to store data.")
         self.parent_parser.add_argument(
-            "--replication_factor", "--rf", default=DEFAULT_REPLICATION_FACTOR, type=int,
+            "--replication_factor", "--rf", type=int, default=None,
             help="Replication factor for the cluster as well as default number of masters. ")
         self.parent_parser.add_argument(
-            "--num_shards_per_tserver", default=2, type=int,
+            "--num_shards_per_tserver", type=int, default=None,
             help="Number of shards (tablets) to start per tablet server for each non-YSQL table.")
         self.parent_parser.add_argument(
-            "--ysql_num_shards_per_tserver", default=2, type=int,
+            "--ysql_num_shards_per_tserver", type=int, default=None,
             help="Number of shards (tablets) to start per tablet server for each YSQL table.")
         self.parent_parser.add_argument(
-            "--timeout-yb-admin-sec", default=MAX_YB_ADMIN_WAIT_SEC, type=float,
+            "--timeout-yb-admin-sec", type=float, default=None,
             help="Timeout in seconds for operations that call yb-admin and wait on the cluster.")
         self.parent_parser.add_argument(
-            "--timeout-processes-running-sec", default=MAX_WAIT_FOR_PROCESSES_RUNNING_SEC,
-            type=float,
+            "--timeout-processes-running-sec",
+            type=float, default=None,
             help="Timeout in seconds for operations that wait on the master and tserver processes "
                  "to come up and start running.")
         self.parent_parser.add_argument(
-            "--verbose", action="store_true",
+            "--verbose", action="store_true", default=None,
             help="If specified, will log internal debug messages to stderr. Note --verbose "
                  "affects yb-ctl and --v affects server processes.")
         self.parent_parser.add_argument(
-            "--install-if-needed",
-            action='store_true',
+            "--install-if-needed", action='store_true', default=None,
             help="With this option, if YugaByte DB is not yet installed on the system, the latest "
                  "version will be downloaded and installed automatically.")
 
@@ -964,6 +963,41 @@ class ClusterControl:
         """
         Sets up the command-line parser. Called from the constructor.
         """
+        self.parser.add_argument(
+            "--binary_dir", default=None, dest="binary_dir_dest",
+            help="Specify a custom directory in which to find the yugabyte binaries.")
+        self.parser.add_argument(
+            "--data_dir", default=get_default_data_dir(), dest="data_dir_dest",
+            help="Specify a custom directory where to store data.")
+        self.parser.add_argument(
+            "--replication_factor", "--rf", default=DEFAULT_REPLICATION_FACTOR, type=int,
+            dest="replication_factor_dest",
+            help="Replication factor for the cluster as well as default number of masters. ")
+        self.parser.add_argument(
+            "--num_shards_per_tserver", default=2, type=int, dest="num_shards_per_tserver_dest",
+            help="Number of shards (tablets) to start per tablet server for each non-YSQL table.")
+        self.parser.add_argument(
+            "--ysql_num_shards_per_tserver", default=2, type=int,
+            dest="ysql_num_shards_per_tserver_dest",
+            help="Number of shards (tablets) to start per tablet server for each YSQL table.")
+        self.parser.add_argument(
+            "--timeout-yb-admin-sec", default=MAX_YB_ADMIN_WAIT_SEC, type=float,
+            dest="timeout_yb_admin_sec_dest",
+            help="Timeout in seconds for operations that call yb-admin and wait on the cluster.")
+        self.parser.add_argument(
+            "--timeout-processes-running-sec", default=MAX_WAIT_FOR_PROCESSES_RUNNING_SEC,
+            dest="timeout_processes_running_sec_dest", type=float,
+            help="Timeout in seconds for operations that wait on the master and tserver processes "
+                 "to come up and start running.")
+        self.parser.add_argument(
+            "--verbose", action="store_true", dest="verbose_dest",
+            help="If specified, will log internal debug messages to stderr. Note --verbose "
+                 "affects yb-ctl and --v affects server processes.")
+        self.parser.add_argument(
+            "--install-if-needed", dest="install_dest", action='store_true',
+            help="With this option, if YugaByte DB is not yet installed on the system, the latest "
+                 "version will be downloaded and installed automatically.")
+
         subparsers = {}
         for cmd_name, help in (
                 ("create", "Create a new cluster"),
@@ -1863,6 +1897,16 @@ class ClusterControl:
 
     def run(self):
         self.args = self.parser.parse_args()
+        # TODO: This is required for `yb-ctl --FLAGS CMD` syntax to work. Delete this when we
+        # update the docs so we only support `yb-ctl CMD --FLAGS` syntax.
+        for flag in dir(self.args):
+            if "_dest" in flag:
+                real_flag = flag[:-5]
+                parent_arg = getattr(self.args, flag, None)
+                child_arg = getattr(self.args, real_flag, None)
+                print(str(real_flag) + ": " + str(child_arg))
+                if child_arg is None:
+                    setattr(self.args, real_flag, parent_arg)
         if not self.args.verbose:
             fd, filename = tempfile.mkstemp(text=True)
             os.close(fd)
@@ -1911,3 +1955,4 @@ if __name__ == "__main__":
     except ExitWithError as ex:
         logging.error(ex)
         sys.exit(1)
+
