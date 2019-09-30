@@ -813,7 +813,10 @@ class ClusterControl:
         self.options = ClusterOptions()
         self.args = None
 
-        self.parser = argparse.ArgumentParser()
+        # Parent subparser holding all common flags.
+        self.parent_parser = argparse.ArgumentParser(add_help=False)
+        self.setup_parent_parser()
+        self.parser = argparse.ArgumentParser(parents=[self.parent_parser])
         self.subparsers = self.parser.add_subparsers()
 
         # This is a dictionary serialized into JSON and written to a configuration file in the data
@@ -828,12 +831,48 @@ class ClusterControl:
         self.already_running_daemons = set()
 
     def setup_base_parser(self, command, help=None):
-        subparser = self.subparsers.add_parser(command, help=help)
+        subparser = self.subparsers.add_parser(command, help=help, parents=[self.parent_parser])
         func = getattr(self, "%s_cmd_impl" % command, None)
         if not func:
             raise RuntimeError("Invalid command: {}".format(command))
         subparser.set_defaults(func=func)
         return subparser
+
+    # TODO: Combine this with setup_parsing when we drop support for `yb-ctl --rf 3 create` so
+    # self.parser doesn't require a parent parser.
+    def setup_parent_parser(self):
+        self.parent_parser.add_argument(
+            "--binary_dir", default=None,
+            help="Specify a custom directory in which to find the yugabyte binaries.")
+        self.parent_parser.add_argument(
+            "--data_dir", default=get_default_data_dir(),
+            help="Specify a custom directory where to store data.")
+        self.parent_parser.add_argument(
+            "--replication_factor", "--rf", default=DEFAULT_REPLICATION_FACTOR, type=int,
+            help="Replication factor for the cluster as well as default number of masters. ")
+        self.parent_parser.add_argument(
+            "--num_shards_per_tserver", default=2, type=int,
+            help="Number of shards (tablets) to start per tablet server for each non-YSQL table.")
+        self.parent_parser.add_argument(
+            "--ysql_num_shards_per_tserver", default=2, type=int,
+            help="Number of shards (tablets) to start per tablet server for each YSQL table.")
+        self.parent_parser.add_argument(
+            "--timeout-yb-admin-sec", default=MAX_YB_ADMIN_WAIT_SEC, type=float,
+            help="Timeout in seconds for operations that call yb-admin and wait on the cluster.")
+        self.parent_parser.add_argument(
+            "--timeout-processes-running-sec", default=MAX_WAIT_FOR_PROCESSES_RUNNING_SEC,
+            type=float,
+            help="Timeout in seconds for operations that wait on the master and tserver processes "
+                 "to come up and start running.")
+        self.parent_parser.add_argument(
+            "--verbose", action="store_true",
+            help="If specified, will log internal debug messages to stderr. Note --verbose "
+                 "affects yb-ctl and --v affects server processes.")
+        self.parent_parser.add_argument(
+            "--install-if-needed",
+            action='store_true',
+            help="With this option, if YugaByte DB is not yet installed on the system, the latest "
+                 "version will be downloaded and installed automatically.")
 
     def get_cluster_config_file_path(self):
         """
@@ -925,39 +964,6 @@ class ClusterControl:
         """
         Sets up the command-line parser. Called from the constructor.
         """
-        self.parser.add_argument(
-            "--binary_dir", default=None,
-            help="Specify a custom directory in which to find the yugabyte binaries.")
-        self.parser.add_argument(
-            "--data_dir", default=get_default_data_dir(),
-            help="Specify a custom directory where to store data.")
-        self.parser.add_argument(
-            "--replication_factor", "--rf", default=DEFAULT_REPLICATION_FACTOR, type=int,
-            help="Replication factor for the cluster as well as default number of masters. ")
-        self.parser.add_argument(
-            "--num_shards_per_tserver", default=2, type=int,
-            help="Number of shards (tablets) to start per tablet server for each non-YSQL table.")
-        self.parser.add_argument(
-            "--ysql_num_shards_per_tserver", default=2, type=int,
-            help="Number of shards (tablets) to start per tablet server for each YSQL table.")
-        self.parser.add_argument(
-            "--timeout-yb-admin-sec", default=MAX_YB_ADMIN_WAIT_SEC, type=float,
-            help="Timeout in seconds for operations that call yb-admin and wait on the cluster.")
-        self.parser.add_argument(
-            "--timeout-processes-running-sec", default=MAX_WAIT_FOR_PROCESSES_RUNNING_SEC,
-            type=float,
-            help="Timeout in seconds for operations that wait on the master and tserver processes "
-                 "to come up and start running.")
-        self.parser.add_argument(
-            "--verbose", action="store_true",
-            help="If specified, will log internal debug messages to stderr.")
-
-        self.parser.add_argument(
-            "--install-if-needed",
-            action='store_true',
-            help="With this option, if YugaByte DB is not yet installed on the system, the latest "
-                 "version will be downloaded and installed automatically.")
-
         subparsers = {}
         for cmd_name, help in (
                 ("create", "Create a new cluster"),
@@ -1002,9 +1008,10 @@ class ClusterControl:
                                          "in case you would want to pass more than one value.")
 
             subparsers[cmd].add_argument("--v", default=0, choices=[str(i) for i in range(5)],
-                                         help="Specify the verbosity which dictates "
-                                         "the amount of logging on servers trace files."
-                                         "Default is 0 and maximum is 4.")
+                                         help="Specify the verbosity of server processes, which "
+                                         "dictates the amount of logging on servers trace files. "
+                                         "Note --verbose affects yb-ctl and --v affects server "
+                                         "processes. Default is 0 and maximum is 4.")
 
             subparsers[cmd].add_argument("--use_cassandra_authentication",
                                          action='store_true',
