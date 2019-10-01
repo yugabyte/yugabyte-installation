@@ -1904,7 +1904,6 @@ class ClusterControl:
                 real_flag = flag[:-5]
                 parent_arg = getattr(self.args, flag, None)
                 child_arg = getattr(self.args, real_flag, None)
-                print(str(real_flag) + ": " + str(child_arg))
                 if child_arg is None:
                     setattr(self.args, real_flag, parent_arg)
         if not self.args.verbose:
