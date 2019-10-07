@@ -332,6 +332,9 @@ def remove_surrounding_quotes(s):
                 return s[1:-1]
     return s
 
+def flag_is_set(flags, name):
+    value = flags.get(name, "").lower()
+    return value == '1' or value == 'true'
 
 class Installer:
     YUGABYTE_DB_VERSION = '1.3.2.1'
@@ -1882,10 +1885,10 @@ class ClusterControl:
             "Successfully ran initdb to initialize YSQL data in the YugaByte cluster")
 
     def get_certs_dir(self):
-        for item in self.options.master_flags:
-            key, value = item.split("=")
-            if key == "certs_dir":
-                return value
+        options = {k: v for k, v in (item.split("=") for item in self.options.master_flags)}
+        if flag_is_set(options, "use_node_to_node_encryption") \
+                and not flag_is_set(options, "allow_insecure_connections"):
+            return options.get("certs_dir")
         return None
 
     def yb_admin_cmd_list(self, *actions):
