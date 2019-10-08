@@ -332,9 +332,11 @@ def remove_surrounding_quotes(s):
                 return s[1:-1]
     return s
 
+
 def flag_is_set(flags, name):
     value = flags.get(name, "").lower()
     return value == '1' or value == 'true'
+
 
 class Installer:
     YUGABYTE_DB_VERSION = '1.3.2.1'
@@ -1101,8 +1103,9 @@ class ClusterControl:
         if not self.options.placement_info:
             return
 
-        cmd = self.yb_admin_cmd_list("modify_placement_info", self.options.placement_info_raw,
-               str(self.get_replication_factor()))
+        cmd = self.yb_admin_cmd_list(
+            "modify_placement_info", self.options.placement_info_raw,
+            str(self.get_replication_factor()))
 
         def call_modify_placement_info(should_get_error):
             call_get_output_maybe_error(cmd, should_get_error)
@@ -1429,8 +1432,9 @@ class ClusterControl:
     def change_config_if_master(self, daemon_id, cmd_type):
         if daemon_id.daemon_type == DAEMON_TYPE_TSERVER:
             return
-        cmd = self.yb_admin_cmd_list("change_master_config", cmd_type, self.options.get_ip_address(daemon_id),
-               str(self.options.base_ports[DAEMON_TYPE_MASTER]["rpc"]))
+        cmd = self.yb_admin_cmd_list(
+            "change_master_config", cmd_type, self.options.get_ip_address(daemon_id),
+            str(self.options.base_ports[DAEMON_TYPE_MASTER]["rpc"]))
 
         def call_change_config(should_get_error):
             call_get_output_maybe_error(cmd, should_get_error)
@@ -1830,9 +1834,9 @@ class ClusterControl:
         print("Setting up YugaByte DB support for Redis API.")
         self.set_master_addresses()
         self.wait_for_cluster_or_raise()
-        cmd_setup_redis_table = self.yb_admin_cmd_list("--yb_num_shards_per_tserver",
-                                 str(self.options.num_shards_per_tserver),
-                                 "setup_redis_table")
+        cmd_setup_redis_table = self.yb_admin_cmd_list(
+            "--yb_num_shards_per_tserver", str(self.options.num_shards_per_tserver),
+            "setup_redis_table")
         proc = subprocess.Popen(
             cmd_setup_redis_table, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         result, _ = proc.communicate()
