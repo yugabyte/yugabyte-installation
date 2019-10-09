@@ -333,8 +333,8 @@ def remove_surrounding_quotes(s):
     return s
 
 
-def flag_is_set(flags, name):
-    value = flags.get(name, "").lower()
+def is_flag_true(flags, name):
+    value = flags.get(name, '').lower()
     return value == '1' or value == 'true'
 
 
@@ -1890,8 +1890,8 @@ class ClusterControl:
 
     def get_certs_dir(self):
         options = {k: v for k, v in (item.split("=") for item in self.options.master_flags)}
-        if flag_is_set(options, "use_node_to_node_encryption") \
-                and not flag_is_set(options, "allow_insecure_connections"):
+        if is_flag_true(options, "use_node_to_node_encryption") \
+                and not is_flag_true(options, "allow_insecure_connections"):
             return options.get("certs_dir")
         return None
 
