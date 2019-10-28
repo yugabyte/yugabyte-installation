@@ -79,8 +79,7 @@ import subprocess
 import sys
 import time
 import tempfile
-import urllib
-
+import csv
 
 DAEMON_TYPE_MASTER = 'master'
 DAEMON_TYPE_TSERVER = 'tserver'
@@ -583,7 +582,7 @@ class ClusterOptions:
         self.ip_start = DEFAULT_IP_START
 
     def parse_flag_args(self, flag_args):
-        flags = [] if flag_args is None else flag_args.split(",")
+        flags = [] if flag_args is None else next(csv.reader([flag_args]), [])
         return [item.strip() for item in flags]
 
     def _find_installation_dir(self):
