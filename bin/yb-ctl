@@ -1891,7 +1891,9 @@ class ClusterControl:
         options = {k: v for k, v in (item.split("=") for item in self.options.master_flags)}
         if is_flag_true(options, "use_node_to_node_encryption") \
                 and not is_flag_true(options, "allow_insecure_connections"):
-            return options.get("certs_dir")
+            return options.get(
+                "certs_dir",
+                "{}/yb-data/{}/certs".format(self.get_base_node_dirs(1)[0], DAEMON_TYPE_MASTER))
         return None
 
     def yb_admin_cmd_list(self, *actions):
