@@ -1459,7 +1459,7 @@ class ClusterControl:
     def dump_missing_process_error_logs(self):
         pids = self.for_all_daemons(self.get_pid)
         logging.info("PIDs found: {}".format(pids))
-        for daemon_type, pid_list in pids.iteritems():
+        for daemon_type, pid_list in pids.items():
             for index, pid in enumerate(pid_list, 1):
                 if pid is None:
                     daemon_id = DaemonId(daemon_type, index)
