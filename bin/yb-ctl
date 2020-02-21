@@ -711,8 +711,7 @@ class ClusterOptions:
 
         # -----------------------------------------------------------------------------------------
         # Automatic YugaByte DB installation
-        # -----------------------------------------------------------------------------------------
-        
+        # -----------------------------------------------------------------------------------------  
         if args.install_if_needed and not self.installation_dir:
             installer = Installer()
             if installer.install_or_find_existing():
