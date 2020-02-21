@@ -712,7 +712,6 @@ class ClusterOptions:
         # -----------------------------------------------------------------------------------------
         # Automatic YugaByte DB installation
         # -----------------------------------------------------------------------------------------
-
         if args.install_if_needed and not self.installation_dir:
             installer = Installer()
             if installer.install_or_find_existing():
@@ -821,7 +820,8 @@ class ClusterControl:
         self.parent_parser = argparse.ArgumentParser(add_help=False)
         self.setup_parent_parser()
         self.parser = argparse.ArgumentParser()
-        self.subparsers = self.parser.add_subparsers()
+        self.subparsers = self.parser.add_subparsers(dest='command')
+        self.subparsers.required = True
 
         # This is a dictionary serialized into JSON and written to a configuration file in the data
         # directory.
