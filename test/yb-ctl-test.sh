@@ -357,8 +357,8 @@ verify_ysqlsh $custom_ip_start
 
 # -------------------------------------------------------------------------------------------------
 log_heading "Testing putting this version of yb-ctl inside the installation directory"
-( set -x; cp bin/yb-ctl "$installation_dir" )
-start_cluster_run_tests "$installation_dir"
+( set -x; cp bin/yb-ctl "${installation_dir}/bin" )
+start_cluster_run_tests "${installation_dir}/bin"
 
 log_heading \
   "Pretending we've just built the code and are running yb-ctl from the bin directory in the code"
