@@ -338,11 +338,11 @@ def is_flag_true(flags, name):
 
 
 class Installer:
-    YUGABYTE_DB_VERSION = '1.3.2.1'
+    YUGABYTE_DB_VERSION = '2.1.2.0'
     DOWNLOAD_URL_PATTERN = 'https://downloads.yugabyte.com/yugabyte-{version}-{os}.tar.gz'
     SHA256_SUM_BY_OS = {
-        'darwin': 'b1bbdc5d2a679757fd8f8c70f2f01b48d29e725b101c24ad32063ab3ffbffbf7',
-        'linux': '233b138ab75c8c7881d4da015982d84bce62e8ef08b56a37ecd437582ca68f72'
+        'darwin': '30686af69c04b06d234dab29bf4b76899512756b0af3099892fd78850d683535',
+        'linux': '121f91fa023f2789d4df4ee4dab3e6fc107bade8bbdd9267ea6447ba87ea8150'
     }
 
     def __init__(self, only_find_existing=False):
@@ -580,6 +580,7 @@ class ClusterOptions:
         self.num_drives = None
         self.replication_factor = DEFAULT_REPLICATION_FACTOR
         self.ip_start = DEFAULT_IP_START
+        self.listen_ip = ''
 
     def parse_flag_args(self, flag_args):
         flags = [] if flag_args is None else next(csv.reader([flag_args]), [])
@@ -640,6 +641,11 @@ class ClusterOptions:
 
         if hasattr(args, "ip_start"):
             self.ip_start = args.ip_start
+
+        if hasattr(args, "listen_ip"):
+            self.listen_ip = args.listen_ip
+            if self.listen_ip and self.replication_factor > 1:
+                raise RuntimeError("Invalid argument: listen_ip is only compatible with rf=1")
 
         for arg in ["master_flags", "tserver_flags"]:
             try:
@@ -773,16 +779,34 @@ class ClusterOptions:
         # Subtract 1 because daemon_id.index starts from 1.
         return get_local_ip(self.get_ip_start() + daemon_id.index - 1)
 
-    def get_host_port(self, daemon_id, port_type):
-        base_local_url = self.get_ip_address(daemon_id)
-        if port_type in PROTOCOL_TYPES:
-            port_str = str(self.get_client_protocol_port(port_type))
-        else:
-            port_str = str(self.base_ports[daemon_id.daemon_type][port_type])
-        return "{}:{}".format(base_local_url, port_str)
-
     def get_client_protocol_port(self, protocol_type):
         return self.base_ports[protocol_type]['rpc']
+
+    def get_port_str(self, daemon_id, port_type):
+        if port_type in PROTOCOL_TYPES:
+            return str(self.get_client_protocol_port(port_type))
+        else:
+            return str(self.base_ports[daemon_id.daemon_type][port_type])
+
+    def get_host_port(self, daemon_id, port_type):
+        base_local_url = self.get_ip_address(daemon_id)
+        return "{}:{}".format(base_local_url, self.get_port_str(daemon_id, port_type))
+
+    def get_client_listen_host_port(self, daemon_id, port_type=None):
+        base_local_url = self.listen_ip if self.listen_ip else self.get_ip_address(daemon_id)
+        if port_type is None:
+            return base_local_url
+        else:
+            return "{}:{}".format(base_local_url, self.get_port_str(daemon_id, port_type))
+
+    def get_client_advertise_host_port(self, daemon_id, port_type=None):
+        base_ip = self.get_ip_address(daemon_id)
+        if self.listen_ip and self.listen_ip != "0.0.0.0":
+            base_ip = self.listen_ip
+        if port_type is None:
+            return base_ip
+        else:
+            return "{}:{}".format(base_ip, self.get_port_str(daemon_id, port_type))
 
     def set_cluster_config(self, cluster_config):
         self.cluster_config = cluster_config
@@ -1090,6 +1114,12 @@ class ClusterControl:
                 "--ip_start", default=DEFAULT_IP_START, type=int,
                 help="Start index for IP address")
 
+            subparsers[cmd].add_argument(
+                "--listen_ip",
+                dest='listen_ip_dest',
+                help="Specify network interfaces for clients to bind to",
+                default='')
+
             ClusterControl.add_extra_flags_arguments(subparsers[cmd])
             self.options.is_startup_command = True
 
@@ -1221,7 +1251,7 @@ class ClusterControl:
         command_list += [
             # Add in all the shared flags
             "--fs_data_dirs \"{}\"".format(",".join(node_base_dirs)),
-            "--webserver_interface {}".format(self.options.get_ip_address(daemon_id)),
+            "--webserver_interface {}".format(self.options.get_client_listen_host_port(daemon_id)),
             "--rpc_bind_addresses {}".format(self.options.get_ip_address(daemon_id)),
             "--v {}".format(self.options.verbose_level)
         ]
@@ -1270,8 +1300,10 @@ class ClusterControl:
         command_list = [
             "--tserver_master_addrs={}".format(self.options.master_addresses),
             "--yb_num_shards_per_tserver={}".format(self.options.num_shards_per_tserver),
-            "--redis_proxy_bind_address=" + get_host_port('yedis'),
-            "--cql_proxy_bind_address=" + get_host_port('ycql'),
+            "--redis_proxy_bind_address=" +
+            self.options.get_client_listen_host_port(daemon_id, 'yedis'),
+            "--cql_proxy_bind_address=" +
+            self.options.get_client_listen_host_port(daemon_id, 'ycql'),
             "--local_ip_for_outbound_sockets=" + self.options.get_ip_address(daemon_id),
             # TODO ENG-2876: Enable this in master as well.
             "--use_cassandra_authentication={}".format(
@@ -1281,7 +1313,8 @@ class ClusterControl:
         if self.is_ysql_enabled():
             command_list += [
                 "--enable_ysql=true",
-                "--pgsql_proxy_bind_address=" + get_host_port('ysql')
+                "--pgsql_proxy_bind_address=" +
+                self.options.get_client_listen_host_port(daemon_id, 'ysql')
             ]
         else:
             command_list += ["--enable_ysql=false"]
@@ -1568,7 +1601,9 @@ class ClusterControl:
         info_kv_list.extend([
             # TODO: this might cause issues if the first master is down...
             ("Web UI", "http://{}/".format(
-                self.options.get_host_port(DaemonId(DAEMON_TYPE_MASTER, 1), "http"))),
+                self.options.get_client_advertise_host_port(
+                    DaemonId(DAEMON_TYPE_MASTER, 1),
+                    "http"))),
             ("Cluster Data", self.options.cluster_base_dir)
         ])
         self.print_status_box(title, info_kv_list)
@@ -1585,7 +1620,7 @@ class ClusterControl:
         if not tserver_daemon_id:
             return info_kv_list
 
-        tserver_ip_address = self.options.get_ip_address(tserver_daemon_id)
+        ip_address = self.options.get_client_advertise_host_port(tserver_daemon_id)
 
         # -----------------------------------------------------------------------------------------
         # ysqlsh command line
@@ -1594,12 +1629,12 @@ class ClusterControl:
         if self.is_ysql_enabled():
             ysql_port = self.options.get_client_protocol_port('ysql')
             ysqlsh_cmd_line = format_cmd_line_with_host_port(
-                self.options.get_client_tool_path('ysqlsh'), tserver_ip_address, ysql_port,
+                self.options.get_client_tool_path('ysqlsh'), ip_address, ysql_port,
                 YSQL_DEFAULT_PORT)
 
             info_kv_list.extend([
                 ("JDBC", "jdbc:postgresql://{}:{}/postgres".format(
-                    tserver_ip_address, ysql_port)),
+                    ip_address, ysql_port)),
                 ("YSQL Shell", ysqlsh_cmd_line)
             ])
 
@@ -1609,8 +1644,8 @@ class ClusterControl:
 
         ycql_port = self.options.get_client_protocol_port('ycql')
         cqlsh_cmd_line = self.options.get_client_tool_path('cqlsh')
-        if tserver_ip_address != LOCALHOST_IP or ycql_port != YCQL_DEFAULT_PORT:
-            cqlsh_cmd_line += ' %s' % tserver_ip_address
+        if ip_address != LOCALHOST_IP or ycql_port != YCQL_DEFAULT_PORT:
+            cqlsh_cmd_line += ' %s' % ip_address
             if ycql_port != YCQL_DEFAULT_PORT:
                 cqlsh_cmd_line += ' %s' % ycql_port
 
@@ -1624,7 +1659,7 @@ class ClusterControl:
         # TODO: should probably not even display this if we can know it's not there...
         yedis_port = self.options.get_client_protocol_port('yedis')
         redis_cli_cmd_line = format_cmd_line_with_host_port(
-            self.options.get_client_tool_path('redis-cli'), tserver_ip_address, yedis_port,
+            self.options.get_client_tool_path('redis-cli'), ip_address, yedis_port,
             YEDIS_DEFAULT_PORT)
         info_kv_list.append(("YEDIS Shell", redis_cli_cmd_line))
         return info_kv_list
