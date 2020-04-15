@@ -1923,6 +1923,9 @@ class ClusterControl:
             "Successfully ran initdb to initialize YSQL data in the YugaByte cluster")
 
     def get_certs_dir(self):
+        # We split parameters containing multiple '='s like 'vmodule=meta_cache=5,tablet=5' into 
+        # key before first '=' and value for the rest by passing maxsplit = 1 into item.split as
+        # a second parameter.
         options = {k: v for k, v in (item.split("=", 1) for item in self.options.master_flags)}
         if is_flag_true(options, "use_node_to_node_encryption") \
                 and not is_flag_true(options, "allow_insecure_connections"):
