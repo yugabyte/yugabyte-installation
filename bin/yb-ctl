@@ -546,6 +546,8 @@ class ClusterOptions:
         self.ysql_num_shards_per_tserver = None
         self.timeout_yb_admin_sec = None
         self.timeout_processes_running_sec = None
+        self.master_memory_limit_ratio = 0.35
+        self.tserver_memory_limit_ratio = 0.65
 
         self.cluster_base_dir = None
 
@@ -632,6 +634,10 @@ class ClusterOptions:
         self.ysql_num_shards_per_tserver = args.ysql_num_shards_per_tserver
         self.timeout_yb_admin_sec = args.timeout_yb_admin_sec
         self.timeout_processes_running_sec = args.timeout_processes_running_sec
+        if hasattr(args, "master_memory_limit_ratio"):
+            self.master_memory_limit_ratio = args.master_memory_limit_ratio
+        if hasattr(args, "tserver_memory_limit_ratio"):
+            self.tserver_memory_limit_ratio = args.tserver_memory_limit_ratio
 
         if hasattr(args, "v"):
             self.verbose_level = args.v
@@ -1075,6 +1081,12 @@ class ClusterControl:
                                          "Note --verbose affects yb-ctl and --v affects server "
                                          "processes. Default is 0 and maximum is 4.")
 
+            subparsers[cmd].add_argument("--tserver_memory_limit_ratio", default=0.65, type=float,
+                                        help="Ratio of total memory that tserver will be restricted to.")
+
+            subparsers[cmd].add_argument("--master_memory_limit_ratio", default=0.35, type=float,
+                                        help="Ratio of total memory that master will be restricted to.")
+
             subparsers[cmd].add_argument("--use_cassandra_authentication",
                                          action='store_true',
                                          help="If specified, this flag will be "
@@ -1281,7 +1293,8 @@ class ClusterControl:
         command_list = [
             "--replication_factor={}".format(self.get_replication_factor()),
             "--yb_num_shards_per_tserver {}".format(self.options.num_shards_per_tserver),
-            "--ysql_num_shards_per_tserver={}".format(self.options.ysql_num_shards_per_tserver)
+            "--ysql_num_shards_per_tserver={}".format(self.options.ysql_num_shards_per_tserver),
+            "--default_memory_limit_to_ram_ratio={}".format(self.options.master_memory_limit_ratio)
         ]
 
         if not self.options.is_shell_master:
@@ -1308,7 +1321,8 @@ class ClusterControl:
             # TODO ENG-2876: Enable this in master as well.
             "--use_cassandra_authentication={}".format(
                 str(self.options.use_cassandra_authentication).lower()),
-            "--ysql_num_shards_per_tserver={}".format(self.options.ysql_num_shards_per_tserver)
+            "--ysql_num_shards_per_tserver={}".format(self.options.ysql_num_shards_per_tserver),
+            "--default_memory_limit_to_ram_ratio={}".format(self.options.tserver_memory_limit_ratio)
         ]
         if self.is_ysql_enabled():
             command_list += [
