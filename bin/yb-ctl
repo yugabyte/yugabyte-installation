@@ -649,7 +649,12 @@ class ClusterOptions:
             self.ip_start = args.ip_start
 
         if hasattr(args, "listen_ip"):
-            self.listen_ip = args.listen_ip
+            if args.listen_ip:
+                print("listen_ip PROVIDED")
+                self.listen_ip = args.listen_ip
+            elif (self.replication_factor == 1):
+                print("Not set and RF 1 so default.")
+                self.listen_ip = '0.0.0.0'
             if self.listen_ip and self.replication_factor > 1:
                 raise RuntimeError("Invalid argument: listen_ip is only compatible with rf=1")
 
@@ -799,7 +804,9 @@ class ClusterOptions:
         return "{}:{}".format(base_local_url, self.get_port_str(daemon_id, port_type))
 
     def get_client_listen_host_port(self, daemon_id, port_type=None):
+        print("LISTEN listen_ip is %s" % self.listen_ip)
         base_local_url = self.listen_ip if self.listen_ip else self.get_ip_address(daemon_id)
+        print("After logic, base_local_url is %s" % base_local_url)
         if port_type is None:
             return base_local_url
         else:
@@ -807,8 +814,10 @@ class ClusterOptions:
 
     def get_client_advertise_host_port(self, daemon_id, port_type=None):
         base_ip = self.get_ip_address(daemon_id)
+        print("Initial base ip %s" % base_ip)
         if self.listen_ip and self.listen_ip != "0.0.0.0":
             base_ip = self.listen_ip
+        print("After if base ip %s" % base_ip)
         if port_type is None:
             return base_ip
         else:
