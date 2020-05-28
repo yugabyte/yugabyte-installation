@@ -801,9 +801,7 @@ class ClusterOptions:
         return "{}:{}".format(base_local_url, self.get_port_str(daemon_id, port_type))
 
     def get_client_listen_host_port(self, daemon_id, port_type=None):
-        print("LISTEN listen_ip is %s" % self.listen_ip)
         base_local_url = self.listen_ip if self.listen_ip else self.get_ip_address(daemon_id)
-        print("After logic, base_local_url is %s" % base_local_url)
         if port_type is None:
             return base_local_url
         else:
@@ -811,10 +809,8 @@ class ClusterOptions:
 
     def get_client_advertise_host_port(self, daemon_id, port_type=None):
         base_ip = self.get_ip_address(daemon_id)
-        print("Initial base ip %s" % base_ip)
         if self.listen_ip and self.listen_ip != "0.0.0.0":
             base_ip = self.listen_ip
-        print("After if base ip %s" % base_ip)
         if port_type is None:
             return base_ip
         else:
