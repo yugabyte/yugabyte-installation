@@ -649,11 +649,8 @@ class ClusterOptions:
             self.ip_start = args.ip_start
 
         if hasattr(args, "listen_ip"):
-            if args.listen_ip:
-                print("listen_ip PROVIDED")
-                self.listen_ip = args.listen_ip
-            elif (self.replication_factor == 1):
-                print("Not set and RF 1 so default.")
+            self.listen_ip = args.listen_ip
+            if (self.replication_factor == 1 and not self.listen_ip):
                 self.listen_ip = '0.0.0.0'
             if self.listen_ip and self.replication_factor > 1:
                 raise RuntimeError("Invalid argument: listen_ip is only compatible with rf=1")
