@@ -1659,7 +1659,7 @@ class ClusterControl:
         # -----------------------------------------------------------------------------------------
 
         ycql_port = self.options.get_client_protocol_port('ycql')
-        cqlsh_cmd_line = self.options.get_client_tool_path('cqlsh')
+        cqlsh_cmd_line = self.options.get_client_tool_path('ycqlsh')
         if ip_address != LOCALHOST_IP or ycql_port != YCQL_DEFAULT_PORT:
             cqlsh_cmd_line += ' %s' % ip_address
             if ycql_port != YCQL_DEFAULT_PORT:
