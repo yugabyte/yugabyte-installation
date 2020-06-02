@@ -1125,7 +1125,7 @@ class ClusterControl:
                 help="We create separate directories and treat them as separate drives.")
 
             subparsers[cmd].add_argument(
-                "--ip_start", default=DEFAULT_IP_START, type=int,
+                "--ip_start", type=int,
                 help="Start index for IP address")
 
             subparsers[cmd].add_argument(
