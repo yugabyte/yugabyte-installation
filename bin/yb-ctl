@@ -1393,7 +1393,7 @@ class ClusterControl:
         try:
             os.kill(pid, signal.SIGTERM)
         except OSError as e:
-            if e.errno == os.errno.ESRCH:
+            if e.errno == errno.ESRCH:
                 logging.info("{} does not exist; nothing to stop".format(name))
             else:
                 raise e
